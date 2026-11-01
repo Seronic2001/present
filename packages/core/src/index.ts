@@ -1,0 +1,10 @@
+export * from './compiled.ts';
+export * from './diagnostics.ts';
+export * from './parse.ts';
+export { MACROS, iconNames } from './macros.ts';
+export { CUES } from './score.ts';
+export { compileSlide, catalog } from './compile.ts';
+export * from './deck.ts';
+export * from './ops.ts';
+export * from './references.ts';
+export { LOOP } from './guide.ts';

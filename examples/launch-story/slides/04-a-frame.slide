@@ -1,0 +1,26 @@
+---
+title: A frame is a pure function
+brief: The core rule stated as a formula, then the three things it gives you.
+notes: Everything else in the system follows from this one line.
+score:
+  intro:
+    - rise: rule
+      at: 200
+  steps:
+    - name: what it gives you
+      cues:
+        - rise: [a, b, c]
+          from: [0, 16]
+          stagger: 140
+---
+<Header>One rule holds it <em>together</em></Header>
+<Stack gap="28">
+  <Card id="rule" tone="accent" label="The rule">
+    <div class="mono" style="font-size:40px">render(document, slide, step, t) → pixels</div>
+  </Card>
+  <Grid cols="3">
+    <Card id="a" title="Reproducible"><Text>Any moment of any animation is one call away.</Text></Card>
+    <Card id="b" title="Checkable"><Text>Every step can be measured, not eyeballed.</Text></Card>
+    <Card id="c" title="Exportable"><Text>PDF and images need no animation code at all.</Text></Card>
+  </Grid>
+</Stack>

@@ -1,0 +1,8 @@
+{
+  "name": "@present/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "bin": { "present": "./src/bin.ts" },
+  "dependencies": { "@present/core": "*", "@present/render": "*", "@present/studio": "*", "@modelcontextprotocol/sdk": "^1.32.2", "zod": "^4.6.7" }
+}

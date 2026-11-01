@@ -1,0 +1,13 @@
+---
+title: Close
+brief: Ends on the one idea from the title.
+notes: Stop here and take questions.
+score:
+  intro:
+    - rise: sub
+      at: 900
+---
+<Center>
+  <Title>Give the agent <em>eyes</em></Title>
+  <Sub id="sub">Then give it something it can check.</Sub>
+</Center>

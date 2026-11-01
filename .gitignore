@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.present/
+*.log
+# Reference deck has no licence of its own: private fixture, never publish
+01-learnings-from-enterprise-rl.html
+reference images/
+fixtures/reference/
+tests/.tmp/
+proof/
+tests/.*
+.claude/settings.local.json

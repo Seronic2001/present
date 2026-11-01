@@ -1,0 +1,16 @@
+---
+title: Decks an agent can see
+brief: Opens the talk. The one idea is that an agent can only make good slides if it can see them.
+notes: Most agent slides fail for a boring reason. Today is about that reason.
+score:
+  intro:
+    - rise: eyebrow
+      at: 100
+    - rise: sub
+      at: 800
+---
+<Center>
+  <Eyebrow id="eyebrow">Sample deck</Eyebrow>
+  <Title>Decks an agent <em>can see</em></Title>
+  <Sub id="sub">Why a slide should be a function of time, and what that unlocks.</Sub>
+</Center>

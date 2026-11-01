@@ -1,0 +1,9 @@
+title: Decks an agent can see
+mode: auto
+slides:
+  - 01-title
+  - 02-why-it-fails
+  - 03-the-loop
+  - 04-a-frame
+  - 05-results
+  - 06-close

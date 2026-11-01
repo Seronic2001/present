@@ -1,0 +1,20 @@
+---
+title: Sample results
+brief: Three illustrative numbers count up. They are placeholders in this sample deck, not measurements.
+notes: Replace these with real numbers before using this deck.
+score:
+  intro:
+    - rise: [one, two, three]
+      from: [0, 14]
+      stagger: 120
+      at: 200
+    - count: [n1-v, n3-v]
+      stagger: 120
+      at: 300
+---
+<Header aside="Sample data">What a <em>tighter loop</em> changes</Header>
+<Grid cols="3" gap="28">
+  <Card id="one" tone="accent"><Stat id="n1" value="3" label="Rounds to a clean slide" /></Card>
+  <Card id="two" tone="ok"><Stat id="n2" value="0" label="Overflow errors shipped" tone="ok" /></Card>
+  <Card id="three" tone="accent"><Stat id="n3" value="14" label="Slides from one brief" /></Card>
+</Grid>

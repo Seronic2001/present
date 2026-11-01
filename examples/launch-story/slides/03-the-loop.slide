@@ -1,0 +1,68 @@
+---
+title: The loop
+brief: >
+  The working loop between agent and deck: draft, render, read diagnostics, fix, and a human
+  comment joining at any point. Particles circulate until the slide rests. Zoom on Render
+  to replay what a frame contains.
+notes: Click Render to zoom in. A frame is a picture, the boxes, and the diagnostics.
+score:
+  intro:
+    - rise: [draft, render, check, fix]
+      from: [0, 12]
+      dur: 420
+      stagger: 110
+      at: 120
+  steps:
+    - name: close the loop
+      cues:
+        - draw: [l1, l2, l3, l4]
+          dur: 420
+          stagger: 180
+        - travel: [l1, l2, l3, l4]
+          dur: 420
+          stagger: 180
+    - name: a human joins
+      cues:
+        - rise: human
+          from: [0, 12]
+        - draw: l5
+          at: 260
+        - pop: comment
+          at: 500
+      loop:
+        every: 4800
+        after: 400
+        cues:
+          - travel: [l1, l2, l3, l4]
+            dur: 800
+            stagger: 1000
+          - hot: [draft, render, check, fix]
+            dur: 800
+            stagger: 1000
+  spots:
+    render:
+      cues:
+        - rise: [png, ids, diags]
+          from: [0, 10]
+          dur: 340
+          stagger: 320
+          at: 300
+---
+<Header aside="Illustrative">The loop that makes it <em>work</em></Header>
+<Diagram viewBox="0 0 1600 640" alt="A loop of four stages: draft, render, read diagnostics and fix. A human comment feeds into draft.">
+  <Box id="draft" x="60" y="110" w="320" h="170" tone="accent" label="Agent" title="Draft" sub="the finished drawing" />
+  <Box id="render" x="640" y="60" w="320" h="270" tone="accent" label="Tool" title="Render" sub="any step, any moment" spot="">
+    <g id="png"><rect class="cardq" x="670" y="244" width="80" height="62" rx="6" /><text class="sm" x="710" y="280" text-anchor="middle">Frame</text></g>
+    <g id="ids"><rect class="cardq" x="760" y="244" width="80" height="62" rx="6" /><text class="sm" x="800" y="280" text-anchor="middle">Boxes</text></g>
+    <g id="diags"><rect class="cardq" x="850" y="244" width="80" height="62" rx="6" /><text class="sm" x="890" y="280" text-anchor="middle">Issues</text></g>
+  </Box>
+  <Box id="check" x="1220" y="110" w="320" h="170" label="Tool" title="Check" sub="overflow, contrast, overlap" />
+  <Box id="fix" x="640" y="430" w="320" h="150" label="Agent" title="Fix" sub="typed, atomic ops" />
+  <Box id="human" x="60" y="430" w="320" h="150" tone="ok" label="Human" title="Comment" sub="on a part, in Studio" />
+  <Badge id="comment" x="372" y="438" tone="ok" r="11" />
+  <Link id="l1" from="draft" to="render" tone="accent" />
+  <Link id="l2" from="render" to="check" tone="accent" />
+  <path id="l3" class="conn-a" d="M 1380 280 L 1380 505 L 960 505" marker-end="url(#03-the-loop-arrow)" />
+  <path id="l4" class="conn-a" d="M 640 505 L 460 505 L 460 240 L 380 240" marker-end="url(#03-the-loop-arrow)" />
+  <path id="l5" class="conn" d="M 220 430 L 220 280" marker-end="url(#03-the-loop-arrow)" />
+</Diagram>

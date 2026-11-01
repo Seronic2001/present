@@ -1,0 +1,79 @@
+---
+title: Why agent slides fail
+brief: >
+  Three reasons agents produce weak decks get struck out on the left, and the one real
+  cause, no way to observe the result, is revealed on the right.
+notes: None of the three is the real problem. The agent never saw its own slide.
+score:
+  intro:
+    - rise: [wrong, right]
+      stagger: 100
+      at: 140
+    - slide: .guess
+      stagger: 180
+      at: 420
+  steps:
+    - name: strike the guesses
+      each: .guess
+      stagger: 180
+      cues:
+        - draw: $ .strike
+          dur: 300
+        - tint: $ .word
+          from: ink
+          opacity: 1
+          at: 120
+        - pop: $ .badge
+          at: 160
+        - ripple: $ .badge
+          tone: danger
+          r0: 6
+          r1: 22
+          at: 220
+    - name: the real cause
+      cues:
+        - rise: cause
+          from: [0, 10]
+        - type: cause-text
+          at: 120
+        - draw: [link-a, link-b, link-c]
+          dur: 320
+          stagger: 60
+          at: 320
+        - rise: [see, point, check]
+          from: [0, 16]
+          dur: 340
+          stagger: 60
+          at: 420
+---
+<Header>Agents don't lack taste, they lack <em>eyes</em></Header>
+<Diagram viewBox="0 0 1600 600" alt="Left: three assumed causes struck out. Right: the real cause, no way to observe the result, leads to three needs.">
+  <Card id="wrong" x="20" y="16" w="700" h="560" tone="danger" label="What we blame" icon="circle-slash" />
+  <g class="guess">
+    <Icon name="paintbrush" x="52" y="150" size="30" />
+    <text class="word big" x="104" y="177" style="fill:var(--struck)" opacity=".68">Weak design sense</text>
+    <Strike class="strike" x1="96" x2="442" y="165" />
+    <Badge class="badge" x="81" y="151" />
+  </g>
+  <g class="guess">
+    <Icon name="book" x="52" y="290" size="30" />
+    <text class="word big" x="104" y="317" style="fill:var(--struck)" opacity=".68">Too few templates</text>
+    <Strike class="strike" x1="96" x2="438" y="305" />
+    <Badge class="badge" x="81" y="291" />
+  </g>
+  <g class="guess">
+    <Icon name="cpu" x="52" y="430" size="30" />
+    <text class="word big" x="104" y="457" style="fill:var(--struck)" opacity=".68">The wrong model</text>
+    <Strike class="strike" x1="96" x2="404" y="445" />
+    <Badge class="badge" x="81" y="431" />
+  </g>
+  <Card id="right" x="750" y="16" w="830" h="560" tone="accent" label="What is actually missing" icon="eye" />
+  <Box id="cause" x="782" y="96" w="766" h="120" tone="accent" />
+  <text id="cause-text" class="big" x="812" y="168">No way to observe the result</text>
+  <Box id="see" x="782" y="300" w="240" h="170" label="Frames" title="See any\nmoment" />
+  <Box id="point" x="1045" y="300" w="240" h="170" label="Ids" title="Point at\nany part" />
+  <Box id="check" x="1308" y="300" w="240" h="170" label="Diagnostics" title="Know what\nis wrong" />
+  <Link id="link-a" from="cause" to="see" />
+  <Link id="link-b" from="cause" to="point" />
+  <Link id="link-c" from="cause" to="check" />
+</Diagram>
