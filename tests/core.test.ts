@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyOps, catalog, compileDeck, compileSlide, CUES, deckOutline, patchSlide, revisionOf, undo, addAnnotation, readAnnotations, resolveAnnotations, confine, type Op } from '@present/core';
+import { applyOps, catalog, compileDeck, compileSlide, CUES, PATTERNS, PHRASES, deckOutline, patchSlide, revisionOf, deckPhrases, savePlan, undo, addAnnotation, readAnnotations, resolveAnnotations, confine, type Op } from '@present/core';
 import { EXAMPLE, tempDeck } from './helpers.ts';
 
 const slide = (body: string, score = '') => `---\ntitle: T\nbrief: B\n${score}---\n${body}\n`;
@@ -42,6 +42,7 @@ describe('diagnostics', () => {
     expect(codes(slide('<div onclick="x()"></div>'))).toContain('disallowed-attr');
     expect(compileSlide(slide('<div onclick="x()"></div>'), { id: 's' }).slide.html).not.toContain('onclick');
     expect(codes(slide('<a href="javascript:x()">y</a>'))).toContain('disallowed-link');
+    expect(codes(slide('<svg><image href="missing.png"/></svg>'))).toEqual(['bad-image']);   // an SVG image is a local file, not a link
   });
   it('flags author mistakes with fixes', () => {
     expect(codes(slide('<Nope />'))).toContain('unknown-macro');
@@ -174,4 +175,106 @@ it('documents every cue in the catalog', () => {
   const c = catalog(CUES);
   expect(c.cues.map(x => x.name)).toContain('travel');
   expect(c.macros.map(m => m.name)).toContain('Diagram');
+});
+
+describe('primitives', () => {
+  const score = (body: string, phrases?: any) => compileSlide(`---\ntitle: t\nbrief: b\nscore:\n${body}---\n<Diagram viewBox="0 0 1600 500" alt="x"><Milestones id="m" x="0" y="0" w="1600" h="480" items="A|a;B|b;C|c" /></Diagram>`, { id: 's', images: () => null, phrases });
+  it('compiles every pattern with no errors, and each has what an agent needs', () => {
+    for (const [name, p] of Object.entries(PATTERNS)) {
+      const r = compileSlide(p.source, { id: name, images: () => null });
+      expect(r.diagnostics.filter(d => d.severity === 'error'), name).toEqual([]);
+      expect(p.useWhen.length, name).toBeGreaterThan(10);
+    }
+  });
+  it('makes one step per part from a single line', () => {
+    const r = score('  steps:\n    - over: .part\n      use: arrive\n');
+    expect(r.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(r.slide.phases).toHaveLength(4);
+    expect(r.slide.phases[2].tracks.map(t => t.k)).toEqual(['draw', 'pop', 'ripple', 'rise']);
+  });
+  it('lets a phrase fit a drawing that lacks some parts', () => {
+    expect(PHRASES.arrive.cues.every(c => c.optional)).toBe(true);
+    const r = score('  intro:\n    - use: arrive\n      on: .card\n');
+    expect(r.diagnostics.filter(d => d.code === 'cue-target-missing')).toEqual([]);
+  });
+  it('takes parameters, and a deck can add and override phrases', () => {
+    const r = score('  intro:\n    - use: mine\n      who: m-2\n', { mine: { doc: 'x', cues: [{ pop: '{who}' }] } });
+    expect(r.slide.phases[0].tracks.filter(t => t.k === 'pop')).toHaveLength(1);
+    expect(r.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+  });
+  it('says what is wrong with a bad phrase or cue', () => {
+    const codes = (b: string, p?: any) => score(b, p).diagnostics.map(d => d.code);
+    expect(codes('  intro:\n    - use: nope\n')).toContain('unknown-phrase');
+    expect(codes('  intro:\n    - use: a\n', { a: { doc: '', cues: [{ use: 'a' }] } })).toContain('phrase-cycle');
+    expect(codes('  intro:\n    - animate: m-1\n')).toContain('animate-needs-prop');
+  });
+  it('adds a slide from a pattern, and refuses an unknown one', () => {
+    const t = tempDeck();
+    const ok = applyOps(t.dir, [{ op: 'addSlide', id: 'plan', pattern: 'agenda' }], revisionOf(t.dir));
+    expect(ok.ok).toBe(true);
+    expect(compileDeck(t.dir).deck.slides.at(-1)!.phases.length).toBe(5);
+    expect(applyOps(t.dir, [{ op: 'addSlide', id: 'x', pattern: 'nope' }], revisionOf(t.dir)).error).toContain('Patterns:');
+    t.done();
+  });
+  it('reads phrases from deck.yaml', () => {
+    const t = tempDeck();
+    writeFileSync(join(t.dir, 'deck.yaml'), readFileSync(join(t.dir, 'deck.yaml'), 'utf8') + '\nphrases:\n  beat:\n    doc: mine\n    cues:\n      - bump: $\n');
+    expect(catalog(CUES, deckPhrases(t.dir)).phrases.map((p: any) => p.name)).toContain('beat');
+    t.done();
+  });
+  it('tells agents how to compose', () => {
+    const c = catalog(CUES);
+    expect(c.howToCompose).toContain('.part');
+    expect(c.patterns.map((p: any) => p.name)).toContain('gates');
+    expect(c.macros.map((m: any) => m.name)).toEqual(expect.arrayContaining(['Milestones', 'Plot', 'Timing', 'Hub', 'Terrain', 'Neck']));
+  });
+});
+
+describe('the slide tree', () => {
+  const nested = (t: ReturnType<typeof tempDeck>) => writeFileSync(join(t.dir, 'deck.yaml'), 'title: T\nslides:\n  - 01-title\n  - id: 02-why-it-fails\n    deep:\n      - 03-the-loop\n      - id: 04-a-frame\n        deep:\n          - 05-results\n  - 06-close\n');
+  it('reads a tree, and counts only the main path as the talk', () => {
+    const t = tempDeck();
+    nested(t);
+    const o = deckOutline(t.dir);
+    expect(o.slides.map(s => s.label)).toEqual(['1', '2', '2.1', '2.2', '2.2.1', '3']);
+    expect(o.slides.find(s => s.id === '05-results')).toMatchObject({ parent: '04-a-frame', depth: 2 });
+    expect(o.deepDiveMs).toBeGreaterThan(0);
+    t.done();
+  });
+  it('keeps the tree through edits, and undo restores it', () => {
+    const t = tempDeck();
+    nested(t);
+    const before = readFileSync(join(t.dir, 'deck.yaml'), 'utf8');
+    expect(applyOps(t.dir, [{ op: 'addSlide', id: 'extra', pattern: 'statement', under: '02-why-it-fails' }], revisionOf(t.dir)).ok).toBe(true);
+    let o = deckOutline(t.dir);
+    expect(o.slides.find(s => s.id === 'extra')).toMatchObject({ parent: '02-why-it-fails', label: '2.3' });
+    expect(o.slides.find(s => s.id === '05-results')?.label).toBe('2.2.1');
+    undo(t.dir);
+    expect(readFileSync(join(t.dir, 'deck.yaml'), 'utf8')).toBe(before);
+    t.done();
+  });
+  it('moves a slide in and out of a dive, and refuses a loop', () => {
+    const t = tempDeck();
+    nested(t);
+    expect(applyOps(t.dir, [{ op: 'moveSlide', id: '06-close', under: '01-title' }], revisionOf(t.dir)).ok).toBe(true);
+    expect(deckOutline(t.dir).slides.find(s => s.id === '06-close')).toMatchObject({ parent: '01-title', label: '1.1' });
+    expect(applyOps(t.dir, [{ op: 'moveSlide', id: '06-close', under: null }], revisionOf(t.dir)).ok).toBe(true);
+    expect(deckOutline(t.dir).slides.find(s => s.id === '06-close')?.depth).toBe(0);
+    expect(applyOps(t.dir, [{ op: 'moveSlide', id: '02-why-it-fails', under: '05-results' }], revisionOf(t.dir)).error).toContain('its own deep dive');
+    t.done();
+  });
+  it('keeps a removed slide\'s deep dives, one level up', () => {
+    const t = tempDeck();
+    nested(t);
+    expect(applyOps(t.dir, [{ op: 'removeSlide', id: '04-a-frame' }], revisionOf(t.dir)).ok).toBe(true);
+    expect(deckOutline(t.dir).slides.find(s => s.id === '05-results')).toMatchObject({ parent: '02-why-it-fails', depth: 1 });
+    t.done();
+  });
+  it('plans deep dives without counting them against the time', () => {
+    const t = tempDeck(), s = (id: string, under?: string) => ({ id, title: id, claim: 'c', under });
+    const r = savePlan(t.dir, { goal: 'g', minutes: 2, slides: [s('a'), s('b', 'a'), s('c', 'a'), s('d', 'a'), s('e', 'a')] });
+    expect(r.issues.filter(i => i.message.includes('minute'))).toEqual([]);
+    expect(savePlan(t.dir, { goal: 'g', slides: [s('a', 'nope')] }).ok).toBe(false);
+    t.done();
+  });
 });

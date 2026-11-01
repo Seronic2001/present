@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
-import { addAnnotation, applyOps, compileDeck, deckOutline, readAnnotations, resolveAnnotations, undo } from '@present/core';
+import { addAnnotation, applyOps, compileDeck, deckOutline, planProgress, readAnnotations, resolveAnnotations, reviewPlan, undo } from '@present/core';
 import { deckHtml, loadProjectMacros } from '@present/render';
 import { studioApi, type StudioOptions } from './studio.ts';
 
@@ -38,17 +38,28 @@ data: ${JSON.stringify(data)}
     return deckHtml(deck, root, '', `${tag}<script>${(await clientBundle()).replace(/<\/script/gi, '<\\/script')}</script>`);
   };
 
-  let timer: NodeJS.Timeout | undefined, refsTimer: NodeJS.Timeout | undefined;
+  let timer: NodeJS.Timeout | undefined, refsTimer: NodeJS.Timeout | undefined, planTimer: NodeJS.Timeout | undefined, edited: string | undefined;
   const watcher = watch(root, { recursive: true }, (_e, f) => {
     if (!f || String(f).startsWith('.present') || String(f).endsWith('.tmp')) return;
-    if (/^references([\/]|$)/.test(String(f))) {
+    if (String(f) === 'plan.yaml') {
+      clearTimeout(planTimer);
+      planTimer = setTimeout(() => broadcast('plan', 1), 120);
+      return;
+    }
+    if (/^references([\\/]|$)/.test(String(f))) {
       clearTimeout(refsTimer);
       refsTimer = setTimeout(() => broadcast('refs', 1), 150);
       return;
     }
     const full = /^(tracks|macros)[\\/]/.test(String(f));
+    edited = /^slides[\\/](.+)\.slide$/.exec(String(f))?.[1] ?? edited;
     clearTimeout(timer);
-    timer = setTimeout(() => { for (const c of clients) c.write(`data: ${full ? 'reload' : 'deck'}\n\n`); }, 80);
+    timer = setTimeout(async () => {
+      if (full) await loadProjectMacros(root).catch(() => {});   // a macro an agent just added or changed
+      for (const c of clients) c.write(`data: ${full ? 'reload' : 'deck'}\n\n`);
+      if (edited) broadcast('edited', edited);
+      edited = undefined;
+    }, 80);
   });
 
   const body = (req: IncomingMessage) => new Promise<any>((ok, no) => {
@@ -90,16 +101,26 @@ data: ${JSON.stringify(data)}
         if (url.pathname === '/api/deck') { const c = compile(); json(res, 200, c); return; }
         if (url.pathname === '/api/annotations') { json(res, 200, readAnnotations(root)); return; }
         if (url.pathname === '/api/outline') { json(res, 200, deckOutline(root)); return; }
+        if (url.pathname === '/api/plan') { json(res, 200, planProgress(root)); return; }
+        if (url.pathname === '/api/problems') { json(res, 200, compile().diagnostics); return; }
       }
       if (req.method === 'POST') {
         const b = await body(req);
-        if (url.pathname === '/api/ops') { json(res, 200, applyOps(root, b.ops, b.baseRevision)); return; }
+        if (url.pathname === '/api/ops') {
+          await loadProjectMacros(root);   // an agent may have just added one, and the watcher can lag
+          json(res, 200, applyOps(root, b.ops, b.baseRevision));
+          return;
+        }
+        if (url.pathname === '/api/plan') { reviewPlan(root, b.status, b.comment); json(res, 200, planProgress(root)); return; }
         if (url.pathname === '/api/undo') { json(res, 200, undo(root)); return; }
         if (url.pathname === '/api/annotate') { json(res, 200, addAnnotation(root, b)); return; }
         if (url.pathname === '/api/resolve') { json(res, 200, { resolved: resolveAnnotations(root, b.ids) }); return; }
       }
       json(res, 404, { error: 'Not found' });
-    } catch (e: any) { json(res, 400, { error: e.message }); }
+    } catch (e: any) {
+      // A failure after the headers went out can only end the response. It must not end the server.
+      if (res.headersSent) res.end(); else json(res, 400, { error: e.message });
+    }
   });
   await new Promise<void>(ok => server.listen(port, '127.0.0.1', ok));
   const actual = (server.address() as { port: number }).port;

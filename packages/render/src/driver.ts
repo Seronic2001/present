@@ -1,13 +1,19 @@
 // Observation: drive the deck in a headless browser, always through seek, so every picture and
 // every check is of a known frame. One browser stays warm; agents call this constantly.
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { compileDeck, type Diagnostic } from '@present/core';
 import { deckHtml, loadProjectMacros } from './bundle.ts';
 
-export interface Frame { slide: number; step?: number; t?: number; spot?: string; spotT?: number; }
+export interface Frame { slide: number; step?: number; t?: number; spot?: string; spotT?: number; actions?: Record<string, number>; }
+export interface Region { x: number; y: number; w: number; h: number; }
+export interface FilmstripView { columns?: number; region?: Region; action?: string; }
+
+const iframesSettled = (page: Page) => page.waitForFunction(() => [...document.querySelectorAll('iframe')].every(f => f.dataset.ready != null), undefined, { timeout: 3000 }).catch(() => undefined);
 
 /** Pixels that differ visibly between two PNGs, measured in the page. */
 export async function pngDiff(page: Page, a: Buffer, b: Buffer) {
@@ -45,7 +51,8 @@ export class Renderer {
       const candidates = [{ channel: 'chrome' }, { channel: 'msedge' }, {}];
       let last: unknown;
       for (const c of candidates) {
-        try { this.browser = await chromium.launch({ headless: true, ...c }); break; } catch (e) { last = e; }
+        // Subpixel smoothing tints the edges of text for one kind of LCD. A picture for judging colour must not.
+        try { this.browser = await chromium.launch({ headless: true, args: ['--disable-lcd-text'], ...c }); break; } catch (e) { last = e; }
       }
       if (!this.browser) throw new Error(`Could not start a browser: ${last}`);
       const ctx = await this.browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, reducedMotion: 'no-preference' });
@@ -53,7 +60,9 @@ export class Renderer {
     }
     await loadProjectMacros(this.dir);
     const { deck } = compileDeck(this.dir);
-    if (deck.revision !== this.loaded) {
+    // By content, not revision: a macro or an embedded page changes the slides but no slide file.
+    const key = createHash('sha256').update(JSON.stringify(deck)).digest('hex');
+    if (key !== this.loaded) {
       const tmp = join(this.dir, '.present');
       mkdirSync(tmp, { recursive: true });
       const file = join(tmp, 'render.html');
@@ -61,7 +70,7 @@ export class Renderer {
       await this.page!.goto(pathToFileURL(file).href + '?still');
       await this.page!.waitForFunction(() => !!(window as any).__present);
       await this.page!.evaluate(() => (window as any).__present.ready());
-      this.loaded = deck.revision;
+      this.loaded = key;
     }
     return this.page!;
   }
@@ -69,11 +78,14 @@ export class Renderer {
 
   async seek(f: Frame) {
     const page = await this.open();
-    return page.evaluate(o => (window as any).__present.seek(o), f as any);
+    const state = await page.evaluate(o => (window as any).__present.seek(o), f as any);
+    await iframesSettled(page);
+    return state;
   }
-  async frame(f: Frame) {
+  async frame(f: Frame, region?: Region) {
     const state = await this.seek(f);
-    return { png: await this.page!.screenshot({ type: 'png' }), state };
+    const clip = region && { x: region.x, y: region.y, width: region.w, height: region.h };
+    return { png: await this.page!.screenshot({ type: 'png', ...(clip ? { clip } : {}) }), state };
   }
   async slideIndex(idOrNo: string | number): Promise<number> {
     if (typeof idOrNo === 'number') return idOrNo;
@@ -91,6 +103,7 @@ export class Renderer {
     const { deck } = compileDeck(this.dir);
     const id = deck.slides[no - 1].id;
     const diagnostics: Diagnostic[] = issues.map((i: any) => ({ ...i, slide: id }));
+    if (deck.slides[no - 1].html.includes('<iframe')) return { diagnostics, boxes };   // a live page need not hold still
     const rested = await page.screenshot({ type: 'png' });
     await page.evaluate(n => (window as any).__present.player.pristine(n), no);
     const drawing = await page.screenshot({ type: 'png' });
@@ -104,23 +117,43 @@ export class Renderer {
     return out;
   }
   /** A contact sheet of one step over time, so motion can be judged from a still. */
-  async filmstrip(no: number, step: number, frames = 8, spanMs?: number, spot?: string): Promise<Buffer> {
+  async filmstrip(no: number, step: number, frames = 8, spanMs?: number, spot?: string, view: FilmstripView = {}): Promise<Buffer> {
     const { deck } = compileDeck(this.dir);
     const spotEnd = spot ? 700 + (deck.slides[no - 1].spots.find(s => s.id === spot)?.end ?? 0) : 0;
-    const end = spanMs ?? (spotEnd || Math.max(400, deck.slides[no - 1].phases[Math.min(step, deck.slides[no - 1].phases.length - 1)].end));
+    const acted = view.action ? deck.slides[no - 1].actions?.find(a => a.id === view.action) : undefined;
+    if (view.action && !acted) throw new Error(`No action "${view.action}" on this slide`);
+    const end = spanMs ?? (acted ? Math.max(400, acted.end) : spotEnd || Math.max(400, deck.slides[no - 1].phases[Math.min(step, deck.slides[no - 1].phases.length - 1)].end));
     const shots: { t: number; b64: string }[] = [];
     for (let i = 0; i < frames; i++) {
       const t = Math.round(end * i / (frames - 1));
-      const { png } = await this.frame(spot ? { slide: no, step, spot, spotT: t } : { slide: no, step, t });
+      const { png } = await this.frame(acted ? { slide: no, step, actions: { [acted.id]: t } } : spot ? { slide: no, step, spot, spotT: t } : { slide: no, step, t }, view.region);
       shots.push({ t, b64: png.toString('base64') });
     }
+    return this.sheet(shots.map(s => ({ label: `${s.t}ms`, b64: s.b64 })), view.columns);
+  }
+  private async sheet(cells: { label: string; b64: string }[], columns = 4): Promise<Buffer> {
     const ctx = await this.browser!.newContext({ viewport: { width: 1920, height: 300 }, deviceScaleFactor: 1 });
     const p = await ctx.newPage();
-    await p.setContent(`<body style="margin:0;padding:12px;background:#0d1117;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font:14px monospace;color:#c9d1d9">${shots.map(s => `<div><img style="width:100%;display:block;border-radius:4px" src="data:image/png;base64,${s.b64}"><div>${s.t}ms</div></div>`).join('')}</body>`);
+    await p.setContent(`<body style="margin:0;padding:12px;background:#0d1117;display:grid;grid-template-columns:repeat(${Math.max(1, Math.min(8, columns))},1fr);gap:10px;font:14px monospace;color:#c9d1d9">${cells.map(s => `<div><img style="width:100%;display:block;border-radius:4px" src="data:image/png;base64,${s.b64}"><div></div></div>`).join('')}</body>`);
+    await p.evaluate(labels => [...document.querySelectorAll('body>div>div')].forEach((d, i) => { d.textContent = labels[i]; }), cells.map(c => c.label));
     await p.waitForFunction(() => [...document.images].every(i => i.complete));
     const png = await p.screenshot({ type: 'png', fullPage: true });
     await ctx.close();
     return png;
+  }
+  /** Every slide finished, on one sheet. changed: only what differs from the last sheet of this deck. */
+  async contactSheet(o: { changed?: boolean; columns?: number } = {}) {
+    await this.open();
+    const { deck } = compileDeck(this.dir);
+    const file = join(this.dir, '.present', 'sheet.json');
+    const last: Record<string, string> = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+    const hash = (s: unknown) => createHash('sha256').update(JSON.stringify(s)).digest('hex');
+    const now = Object.fromEntries(deck.slides.map(s => [s.id, hash(s)]));
+    const shown = deck.slides.flatMap((s, i) => (!o.changed || last[s.id] !== now[s.id] ? [{ s, no: i + 1 }] : []));
+    const cells: { label: string; b64: string }[] = [];
+    for (const { s, no } of shown) cells.push({ label: `${no}  ${s.id}`, b64: (await this.frame({ slide: no })).png.toString('base64') });
+    writeFileSync(file, JSON.stringify(now));
+    return { png: cells.length ? await this.sheet(cells, o.columns) : null, shown: shown.map(x => x.s.id), total: deck.slides.length };
   }
 }
 
@@ -128,6 +161,7 @@ export async function exportHtml(dir: string, out: string) {
   await loadProjectMacros(dir);
   const { deck, diagnostics } = compileDeck(dir);
   const html = await deckHtml(deck, dir);
+  mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, html);
   return { out, bytes: Buffer.byteLength(html), diagnostics };
 }
@@ -136,9 +170,34 @@ export async function exportPdf(dir: string, out: string, perStep = false) {
   const r = new Renderer(dir);
   const page = await r.open();
   await page.evaluate(s => (window as any).__present.player.printLayout(s), perStep);
-  await page.waitForTimeout(100);
+  await page.waitForTimeout(await page.evaluate(() => (document.querySelector('iframe') ? 800 : 100)));
+  mkdirSync(dirname(out), { recursive: true });
   await page.pdf({ path: out, width: '1920px', height: '1080px', printBackground: true });
   await r.close();
+  return { out };
+}
+
+/** Each slide as a full-bleed picture, so it looks exactly as it does in the deck. Text in it is not editable. */
+export async function exportPptx(dir: string, out: string, perStep = false) {
+  const PptxGen = createRequire(import.meta.url)('pptxgenjs') as new () => any;
+  const pptx = new PptxGen();
+  pptx.defineLayout({ name: 'Stage', width: 13.333, height: 7.5 });
+  pptx.layout = 'Stage';
+  const r = new Renderer(dir);
+  await r.open();
+  const { deck } = compileDeck(dir);
+  pptx.title = deck.title;
+  for (const [i, s] of deck.slides.entries()) {
+    for (const step of perStep ? s.phases.map((_, k) => k) : [s.phases.length - 1]) {
+      const { png } = await r.frame({ slide: i + 1, step });
+      const page = pptx.addSlide();
+      page.addImage({ data: `data:image/png;base64,${png.toString('base64')}`, x: 0, y: 0, w: '100%', h: '100%' });
+      if (s.notes) page.addNotes(s.notes);
+    }
+  }
+  await r.close();
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, await pptx.write({ outputType: 'nodebuffer' }) as Buffer);
   return { out };
 }
 

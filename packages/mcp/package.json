@@ -1,0 +1,9 @@
+{
+  "name": "@present/mcp",
+  "version": "0.1.0",
+  "description": "The tools agents use to build, see and fix a Present deck",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "bin": { "present-mcp": "./src/bin.ts" },
+  "dependencies": { "@present/core": "*", "@present/render": "*", "@modelcontextprotocol/sdk": "^1.32.2", "cross-spawn": "^7.0.6", "zod": "^4.6.7" }
+}

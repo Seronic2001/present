@@ -1,0 +1,23 @@
+appId: dev.present.studio
+productName: Present
+copyright: Present
+asar: false            # the server reads and compiles its own sources at run time
+electronDist: node_modules/electron/dist
+directories:
+  output: release
+  buildResources: packages/desktop/build
+files:
+  - package.json
+  - packages/**/*
+  - "!packages/*/node_modules/**"
+  - "!packages/desktop/build/**"
+afterPack: scripts/desktop-after-pack.cjs
+win:
+  target: nsis
+  icon: packages/desktop/build/icon.png
+nsis:
+  oneClick: true
+  perMachine: false
+  shortcutName: Present
+  createDesktopShortcut: true
+  artifactName: Present-Setup-${version}.exe

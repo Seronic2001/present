@@ -6,8 +6,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, w
 import { dirname, join, resolve } from 'node:path';
 import { parseDocument } from 'yaml';
 import { compileSlide } from './compile.ts';
-import { annPath, compileDeck, readAnnotations, readDeck, revisionOf, slidePath, type Annotation } from './deck.ts';
+import { annPath, compileDeck, nestSlides, readAnnotations, readDeck, revisionOf, slidePath, type Annotation } from './deck.ts';
 import type { Diagnostic } from './diagnostics.ts';
+import { PATTERNS } from './patterns.ts';
 import { findById, parseSlide, splitFront, walk, type XNode } from './parse.ts';
 
 export type Op =
@@ -21,8 +22,10 @@ export type Op =
   | { op: 'setNotes'; slide: string; notes: string }
   | { op: 'setBrief'; slide: string; brief: string }
   | { op: 'setTitle'; slide: string; title: string }
-  | { op: 'setDeck'; title?: string; mode?: 'auto' | 'steps'; dwell?: number }
-  | { op: 'addSlide'; id: string; source: string; after?: string }
+  | { op: 'setAlign'; slide: string; align: 'top' | 'center' }
+  | { op: 'setDeck'; title?: string; mode?: 'auto' | 'steps'; dwell?: number; align?: 'top' | 'center' }
+  | { op: 'addSlide'; id: string; source?: string; pattern?: string; after?: string; under?: string }
+  | { op: 'moveSlide'; id: string; under?: string | null; after?: string }
   | { op: 'removeSlide'; id: string }
   | { op: 'reorderSlides'; order: string[] }
   | { op: 'replaceSlide'; id: string; source: string };
@@ -107,6 +110,7 @@ ${src.slice(bodyStart)}`;
   if (op.op === 'setNotes') return setFront(src, 'notes', op.notes);
   if (op.op === 'setBrief') return setFront(src, 'brief', op.brief);
   if (op.op === 'setTitle') return setFront(src, 'title', op.title);
+  if (op.op === 'setAlign') return setFront(src, 'align', op.align);
   const p = parseSlide(src), body = p.body, head = src.slice(0, p.frontEnd);
   switch (op.op) {
     case 'setText': {
@@ -131,9 +135,37 @@ ${src.slice(bodyStart)}`;
   }
 }
 
+// ---- edits made outside the tools: a script, an editor, a person. Each becomes a step of its own in the
+// history, so deck_undo can reverse it, and a later batch cannot silently absorb it.
+const seenPath = (root: string) => join(root, '.present', 'seen.json');
+function snapshot(root: string) {
+  const dir = join(root, 'slides'), files: Record<string, string> = {};
+  for (const f of existsSync(dir) ? readdirSync(dir).filter(x => x.endsWith('.slide')) : []) files[f.replace(/\.slide$/, '')] = readFileSync(join(dir, f), 'utf8');
+  return { deckYaml: readFileSync(join(root, 'deck.yaml'), 'utf8'), files };
+}
+const remember = (root: string) => atomic(seenPath(root), JSON.stringify(snapshot(root)));
+const stampNow = () => new Date().toISOString().replace(/[:.]/g, '-') + '-' + randomBytes(2).toString('hex');
+
+/** Compares the deck with the last state the tools saw. True if something else changed it. */
+export function noteOutsideEdits(dir: string): boolean {
+  const root = resolve(dir);
+  if (!existsSync(join(root, 'deck.yaml'))) return false;
+  if (!existsSync(seenPath(root))) { remember(root); return false; }
+  const old = JSON.parse(readFileSync(seenPath(root), 'utf8')) as ReturnType<typeof snapshot>, now = snapshot(root);
+  const before: Record<string, string | null> = {};
+  for (const id of new Set([...Object.keys(old.files), ...Object.keys(now.files)])) if (old.files[id] !== now.files[id]) before[id] = old.files[id] ?? null;
+  if (!Object.keys(before).length && old.deckYaml === now.deckYaml) return false;
+  const hist = join(root, '.present', 'history');
+  mkdirSync(hist, { recursive: true });
+  writeFileSync(join(hist, `${stampNow()}.json`), JSON.stringify({ ops: [{ op: 'outside' }], before, deckYaml: old.deckYaml }));
+  remember(root);
+  return true;
+}
+
 /** Run a batch. Nothing touches the disk unless the whole batch compiles without errors. */
 export function applyOps(dir: string, ops: Op[], baseRevision: string): ApplyResult {
   const root = resolve(dir);
+  noteOutsideEdits(root);
   const current = revisionOf(root);
   const refuse = (error: string, diagnostics: Diagnostic[] = []): ApplyResult => ({ ok: false, revision: current, diagnostics, error, changed: [] });
   if (baseRevision !== current) return refuse(`Stale revision: deck is at ${current}, you read ${baseRevision}. Read it again and reapply.`);
@@ -141,6 +173,7 @@ export function applyOps(dir: string, ops: Op[], baseRevision: string): ApplyRes
   const { meta } = readDeck(root);
   const files = new Map<string, string | null>();   // slide id → new source, null to delete
   let order = [...readDeck(root).order], orderChanged = false;
+  const parents = { ...readDeck(root).parents };
   const deckFields: Record<string, unknown> = {};
   const read = (id: string) => {
     if (files.has(id)) { const v = files.get(id); if (v == null) throw new Error(`Slide ${id} was removed`); return v; }
@@ -151,18 +184,38 @@ export function applyOps(dir: string, ops: Op[], baseRevision: string): ApplyRes
   try {
     for (const op of ops) {
       if (op.op === 'setDeck') {
-        for (const k of ['title', 'mode', 'dwell'] as const) if (op[k] !== undefined) deckFields[k] = op[k];
+        for (const k of ['title', 'mode', 'dwell', 'align'] as const) if (op[k] !== undefined) deckFields[k] = op[k];
       } else if (op.op === 'addSlide') {
         if (!SAFE_ID.test(op.id)) throw new Error(`Bad slide id "${op.id}"`);
         if (order.includes(op.id)) throw new Error(`Slide ${op.id} already exists`);
-        files.set(op.id, op.source);
+        const start = op.pattern == null ? op.source : PATTERNS[op.pattern]?.source;
+        if (start == null) throw new Error(op.pattern == null ? 'addSlide needs source or pattern' : `No pattern "${op.pattern}". Patterns: ${Object.keys(PATTERNS).join(', ')}`);
+        files.set(op.id, start);
+        if (op.under != null && !order.includes(op.under)) throw new Error(`No slide "${op.under}" to go under`);
+        if (op.under != null) parents[op.id] = op.under;
         const at = op.after ? order.indexOf(op.after) + 1 : order.length;
         order.splice(at, 0, op.id);
+        orderChanged = true;
+      } else if (op.op === 'moveSlide') {
+        if (!order.includes(op.id)) throw new Error(`No slide "${op.id}"`);
+        if (op.under !== undefined) {
+          if (op.under != null && !order.includes(op.under)) throw new Error(`No slide "${op.under}" to go under`);
+          for (let p: string | null | undefined = op.under; p; p = parents[p]) if (p === op.id) throw new Error(`${op.id} cannot go under itself or its own deep dive`);
+          if (op.under == null) delete parents[op.id]; else parents[op.id] = op.under;
+        }
+        if (op.after != null) {
+          if (!order.includes(op.after)) throw new Error(`No slide "${op.after}"`);
+          order = order.filter(x => x !== op.id);
+          order.splice(order.indexOf(op.after) + 1, 0, op.id);
+        }
         orderChanged = true;
       } else if (op.op === 'removeSlide') {
         read(op.id);
         files.set(op.id, null);
         order = order.filter(x => x !== op.id);
+        // Its deep dives survive it, one level up.
+        for (const [kid, p] of Object.entries(parents)) if (p === op.id) { if (parents[op.id]) parents[kid] = parents[op.id]; else delete parents[kid]; }
+        delete parents[op.id];
         orderChanged = true;
       } else if (op.op === 'reorderSlides') {
         if ([...op.order].sort().join() !== [...order].sort().join()) throw new Error('reorderSlides must list every slide exactly once');
@@ -178,11 +231,11 @@ export function applyOps(dir: string, ops: Op[], baseRevision: string): ApplyRes
   } catch (e: any) { return refuse(e.message); }
 
   const diagnostics: Diagnostic[] = [];
-  for (const [id, src] of files) if (src != null) diagnostics.push(...compileSlide(src, { id, images: () => 'data:,', stepLimit: meta.stepLimit }).diagnostics);
+  for (const [id, src] of files) if (src != null) diagnostics.push(...compileSlide(src, { id, images: () => 'data:,', stepLimit: meta.stepLimit, phrases: meta.phrases }).diagnostics);
   if (diagnostics.some(d => d.severity === 'error')) return { ...refuse('Batch rejected: it would leave errors in the deck. Nothing was written.', diagnostics) };
 
   // Journal the old state, then write each file through a temp name.
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-') + '-' + randomBytes(2).toString('hex');
+  const stamp = stampNow();
   const hist = join(root, '.present', 'history');
   mkdirSync(hist, { recursive: true });
   const before: Record<string, string | null> = {};
@@ -196,10 +249,11 @@ export function applyOps(dir: string, ops: Op[], baseRevision: string): ApplyRes
   }
   if (orderChanged || Object.keys(deckFields).length) {
     const doc = parseDocument(readFileSync(deckYaml, 'utf8'));
-    if (orderChanged) doc.set('slides', order);
+    if (orderChanged) doc.set('slides', nestSlides(order, parents));
     for (const [k, v] of Object.entries(deckFields)) doc.set(k, v);
     atomic(deckYaml, doc.toString());
   }
+  remember(root);
   return { ok: true, revision: revisionOf(root), diagnostics: compileDeck(root).diagnostics, changed: [...files.keys()] };
 }
 
@@ -213,6 +267,7 @@ function atomic(p: string, content: string) {
 /** Roll back the most recent batch. */
 export function undo(dir: string): ApplyResult {
   const root = resolve(dir), hist = join(root, '.present', 'history');
+  noteOutsideEdits(root);
   const list = existsSync(hist) ? readdirSync(hist).filter(f => f.endsWith('.json')).sort() : [];
   if (!list.length) return { ok: false, revision: revisionOf(root), diagnostics: [], error: 'Nothing to undo', changed: [] };
   const file = join(hist, list[list.length - 1]);
@@ -222,6 +277,7 @@ export function undo(dir: string): ApplyResult {
   }
   atomic(join(root, 'deck.yaml'), e.deckYaml);
   rmSync(file);
+  remember(root);
   return { ok: true, revision: revisionOf(root), diagnostics: compileDeck(root).diagnostics, changed: Object.keys(e.before) };
 }
 

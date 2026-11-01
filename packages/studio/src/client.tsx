@@ -12,6 +12,7 @@ const api = async (path: string, body?: unknown) => {
   return r.json();
 };
 const P = () => (window as any).__present;
+const query = new URLSearchParams(location.search);
 
 const box = 'position:fixed;right:12px;top:12px;bottom:12px;width:340px;z-index:70;background:#fff;border:1px solid #d1d9e0;border-radius:12px;box-shadow:0 6px 18px #25292e1f;padding:14px;overflow:auto;font:13px/1.45 var(--font-sans);color:#1f2328';
 const label = { font: '600 11px var(--font-mono)', letterSpacing: '.08em', textTransform: 'uppercase', color: '#59636e', margin: '12px 0 4px' } as const;
@@ -41,7 +42,7 @@ function App() {
     es.onmessage = e => { if (e.data === 'reload') location.reload(); else refresh(); };
     api('deck').then(c => setRevision(c.deck.revision));
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'i' && !(e.target as HTMLElement).closest?.('input,textarea')) setOn(v => !v);
+      if (e.key === 'i' && !query.has('show') && !(e.target as HTMLElement).closest?.('input,textarea')) setOn(v => !v);
     };
     addEventListener('keydown', key);
     return () => { es.close(); removeEventListener('keydown', key); };
@@ -125,6 +126,9 @@ function App() {
   );
 }
 
-const host = document.createElement('div');
-document.body.appendChild(host);
-render(<App />, host);
+// The presenter's window gets its deck from the show.
+if (!query.has('presenter')) {
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  render(<App />, host);
+}

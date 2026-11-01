@@ -1,5 +1,5 @@
 // Turns a compiled deck into one self-contained HTML document.
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,6 +17,13 @@ export async function runtimeBundle(): Promise<string> {
     write: false, target: 'es2022', logLevel: 'silent',
   });
   return (runtimeJs = r.outputFiles[0].text);
+}
+
+/** KaTeX's styles with its fonts inside them. Only a deck with a formula carries this. */
+export function mathCss(): string {
+  const dist = join(dirname(require.resolve('katex/package.json')), 'dist');
+  return readFileSync(join(dist, 'katex.min.css'), 'utf8').replace(/src:url\(fonts\/([\w-]+\.woff2)\)[^;}]*/g, (_, f) =>
+    `src:url("data:font/woff2;base64,${readFileSync(join(dist, 'fonts', f)).toString('base64')}") format("woff2")`);
 }
 
 export function fontCss(): string {
@@ -52,7 +59,12 @@ export async function loadProjectMacros(dir: string) {
   const m = join(resolve(dir), 'macros');
   if (!existsSync(m)) return;
   for (const f of readdirSync(m).filter(x => /\.(ts|js|mjs)$/.test(x))) {
-    MACROS[basename(f).replace(/\.\w+$/, '')] = (await import(pathToFileURL(join(m, f)).href)).default;
+    // By modified time, so an edited or newly added macro takes effect without a restart.
+    const url = pathToFileURL(join(m, f));
+    url.searchParams.set('t', String(statSync(join(m, f)).mtimeMs));
+    const def = await import(url.href).then(x => x.default, e => { throw new Error(`macros/${f}: ${e.message}`); });
+    if (!def?.html && !def?.svg) throw new Error(`macros/${f} must default-export { doc, props, example, svg?, html? }. See writingMacros in the catalog.`);
+    MACROS[basename(f).replace(/\.\w+$/, '')] = { doc: '', props: '', example: '', ...def };
   }
 }
 
@@ -65,7 +77,7 @@ export async function deckHtml(deck: CompiledDeck, dir: string, extraHead = '', 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(deck.title)}</title>
-<style>${fontCss()}</style>
+<style>${fontCss()}</style>${deck.slides.some(s => s.html.includes('class="katex')) ? `<style>${mathCss()}</style>` : ''}
 <style>${theme}\n${deck.css}</style>${extraHead}
 </head><body>
 <script type="application/json" id="present-deck">${safeJson(deck)}</script>

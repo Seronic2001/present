@@ -1,0 +1,21 @@
+---
+title: The result
+brief: Shows the measured change point by point, then states it.
+notes: Replace with what you will say.
+score:
+  steps:
+    - over: .part
+      use: arrive
+    - name: the number
+      cues:
+        - use: appear
+          on: claim
+        - count: claim
+---
+<Header>What the numbers <em>show</em></Header>
+<Columns ratio="2.1:1">
+  <Diagram viewBox="0 0 1040 520" alt="A line rising from the first measurement to the last">
+    <Plot id="result" x="0" y="0" w="1040" h="510" points="0.52,0.81,0.95" labels="First,Second,Third" />
+  </Diagram>
+  <Center><Stat id="claim" value="+0.43" label="Replace with the measured change" /></Center>
+</Columns>

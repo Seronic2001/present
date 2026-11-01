@@ -2,9 +2,35 @@
 // The preview is the real deck in a same-origin iframe, so this page reads the player directly.
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import arrowUp from '@primer/octicons/build/svg/arrow-up-16.svg';
+import browser from '@primer/octicons/build/svg/browser-16.svg';
+import check from '@primer/octicons/build/svg/check-16.svg';
+import download from '@primer/octicons/build/svg/download-16.svg';
+import eye from '@primer/octicons/build/svg/eye-16.svg';
+import screenFull from '@primer/octicons/build/svg/screen-full-16.svg';
+import chevronDown from '@primer/octicons/build/svg/chevron-down-16.svg';
+import chevronLeft from '@primer/octicons/build/svg/chevron-left-16.svg';
+import chevronRight from '@primer/octicons/build/svg/chevron-right-16.svg';
+import camera from '@primer/octicons/build/svg/device-camera-16.svg';
+import tasklist from '@primer/octicons/build/svg/tasklist-16.svg';
+import playIcon from '@primer/octicons/build/svg/play-16.svg';
+import plus from '@primer/octicons/build/svg/plus-16.svg';
+import sliders from '@primer/octicons/build/svg/sliders-16.svg';
+import stop from '@primer/octicons/build/svg/square-fill-16.svg';
+import bars from '@primer/octicons/build/svg/three-bars-16.svg';
+import undoIcon from '@primer/octicons/build/svg/undo-16.svg';
+import uploadIcon from '@primer/octicons/build/svg/upload-16.svg';
+import close from '@primer/octicons/build/svg/x-16.svg';
+import CSS from './shell.css';
 
 const { token } = (window as any).__PRESENT_DEV as { token: string };
 const W = 1920, H = 1080;
+/** Only the desktop app can reach other screens. */
+const desktop = (window as any).presentDesktop as undefined | {
+  displays(): Promise<Display[]>; start(o: { display?: number; slide?: number }): Promise<void>; stop(): Promise<void>;
+  onShow(f: (s: { running: boolean; displays: Display[] }) => void): void; onToggle(f: () => void): void; onBegin(f: () => void): void; menu(): void; platform: string; exportDeck(o: { format: string; steps?: boolean }): Promise<boolean>;
+};
+interface Display { id: number; label: string; primary: boolean; width: number; height: number; }
 
 const api = async (path: string, body?: unknown) => {
   const r = await fetch(`/api/${path}`, {
@@ -25,6 +51,102 @@ const upload = async (blob: Blob, name: string, folder = '') => {
 const fileUrl = (path: string) => `/api/reference-file?token=${token}&path=${encodeURIComponent(path)}`;
 const stamp = () => new Date().toTimeString().slice(0, 8).replaceAll(':', '');
 const size = (n: number) => (n < 1e6 ? `${Math.ceil(n / 1e3)} KB` : `${(n / 1e6).toFixed(1)} MB`);
+
+const cursor = '<svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 1.6v11.6l3.2-3 2 4.6 2-.9-2-4.5 4.4-.3z"/></svg>';
+const loop = '<svg width="16" height="16" viewBox="0 0 16 16" style="fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round"><path d="M9.5 13.8C5 15 1.6 12.6 1.6 8.8 1.6 4.6 5 2 8.6 2c3.4 0 5.8 2.2 5.8 5.2 0 3-2.6 5-5.6 4.8"/></svg>';
+const Icon = ({ svg }: { svg: string }) => <span class="icon" aria-hidden="true" dangerouslySetInnerHTML={{ __html: svg }} />;
+
+/** What the human reads in place of a tool's name. */
+const STEP: Record<string, string> = {
+  catalog: 'Read the catalog', plan_write: 'Wrote the plan', plan_read: 'Read the plan', plan_status: 'Updated the plan', deck_create: 'Created the deck', pattern_read: 'Read a pattern', library_add: 'Added from the library', library_save: 'Saved to the library', library_read: 'Read a library item', library_remove: 'Removed from the library', deck_outline: 'Read the outline', slide_read: 'Read a slide', deck_apply: 'Edited the deck', deck_undo: 'Undid a change',
+  slide_render: 'Looked at a slide', slide_filmstrip: 'Checked the motion', deck_check: 'Checked the deck', annotations_list: 'Read your comments',
+  annotations_resolve: 'Closed comments', references_list: 'Listed references', reference_read: 'Read a reference', deck_export: 'Exported',
+};
+const IDEAS = ['Plan a deck from my references', 'Tighten this slide', 'Check the whole deck for problems'];
+
+/** Agent replies are Markdown. This covers what they use, and builds nodes, so nothing in a reply becomes HTML. */
+function inline(s: string) {
+  return s.split(/(`[^`]+`|\*\*[^*]+\*\*)/).map(x =>
+    x.startsWith('`') && x.length > 2 ? <code>{x.slice(1, -1)}</code> : x.startsWith('**') && x.length > 4 ? <b>{x.slice(2, -2)}</b> : x);
+}
+function Markdown({ text }: { text: string }) {
+  const out: any[] = [];
+  text.trim().split(/(```[\s\S]*?(?:```|$))/).forEach((chunk, i) => {
+    if (i % 2) { out.push(<pre>{chunk.replace(/^```.*\n?/, '').replace(/\n?```$/, '')}</pre>); return; }
+    for (const block of chunk.split(/\n{2,}/).map(b => b.trim()).filter(Boolean)) {
+      const lines = block.split('\n');
+      if (lines.every(l => /^\s*[-*] /.test(l))) out.push(<ul>{lines.map(l => <li>{inline(l.replace(/^\s*[-*] /, ''))}</li>)}</ul>);
+      else if (lines.every(l => /^\s*\d+\. /.test(l))) out.push(<ol>{lines.map(l => <li>{inline(l.replace(/^\s*\d+\. /, ''))}</li>)}</ol>);
+      else out.push(<p>{inline(block.replace(/^#+ /, ''))}</p>);
+    }
+  });
+  return <>{out}</>;
+}
+/** Runs of tool calls read as one line of progress. */
+function Reply({ parts }: { parts: any[] }) {
+  const out: any[] = [];
+  let run: string[] = [];
+  const flush = () => { if (run.length) out.push(<div class="steps">{[...new Set(run)].map(t => <code title={t}>{STEP[t] ?? t}</code>)}</div>); run = []; };
+  for (const p of parts) {
+    if (p.tool) { run.push(p.tool); continue; }
+    flush();
+    out.push(p.text ? <Markdown text={p.text} /> : <span class="oops">{p.error}</span>);
+  }
+  flush();
+  return <>{out}</>;
+}
+/** The agent's plan beside what has been built. Comments reach an agent however it is running. */
+function PlanView({ plan, canTalk, onReview, onClose, onOpen }: { plan: any; canTalk: boolean; onReview: (status: string, comment?: { text: string; slide?: string }) => void; onClose: () => void; onOpen: (number: number) => void }) {
+  const [text, setText] = useState('');
+  const [slide, setSlide] = useState<string | undefined>();
+  const send = () => { onReview('changes', { text, slide }); setText(''); setSlide(undefined); };
+  const label: Record<string, string> = { proposed: 'Waiting for your review', changes: 'Changes requested', approved: 'Approved' };
+  const state: Record<string, string> = { planned: 'To build', built: 'Built', problem: 'Has errors' };
+  return <section class="plan" role="region" aria-label="Plan">
+    <div class="planhead">
+      <span class="grow"><b>Plan</b> <small>{label[plan.status]} · {plan.built} of {plan.slides.length} built</small></span>
+      {plan.status !== 'approved' ? <button class="btn primary" onClick={() => onReview('approved')}>Approve plan</button> : null}
+      <button class="ghost square" aria-label="Close plan" onClick={onClose}><Icon svg={close} /></button>
+    </div>
+    <div class="planbody">
+      <h2>{plan.goal}</h2>
+      <p class="planmeta">{[plan.audience, plan.minutes ? `${plan.minutes} minutes` : '', `${plan.slides.length} slides`].filter(Boolean).join(' · ')}</p>
+      {plan.story ? <p>{plan.story}</p> : null}
+      {plan.questions?.length ? <div class="planq"><h3>Questions for you</h3><ul>{plan.questions.map((q: string) => <li>{q}</li>)}</ul></div> : null}
+      {plan.issues.map((i: any) => <p class={'planissue ' + i.severity}>{i.slide ? `${i.slide}: ` : ''}{i.message}. {i.fix}.</p>)}
+      <ol class="story">{plan.slides.map((s: any, k: number) => <li class={'beat ' + s.state}>
+        <div class="beathead">
+          <span class="n">{k + 1}</span>
+          <b class="grow">{s.title}</b>
+          <span class={'state ' + s.state}>{state[s.state]}</span>
+          {s.number > 0 ? <button class="ghost" onClick={() => onOpen(s.number)}>Open</button> : null}
+          <button class="ghost" aria-pressed={slide === s.id} onClick={() => setSlide(x => (x === s.id ? undefined : s.id))}>Comment</button>
+        </div>
+        <p>{s.claim}</p>
+        <dl>
+          {s.under ? <><dt>Deep dive</dt><dd>Under {s.under}</dd></> : null}
+          {s.component || s.pattern ? <><dt>Starts from</dt><dd>{s.component ? `Library: ${s.component}` : s.pattern}</dd></> : null}
+          {s.visual ? <><dt>On screen</dt><dd>{s.visual}</dd></> : null}
+          {s.animation?.length ? <><dt>Animation</dt><dd><ol>{s.animation.map((b: string) => <li>{b}</li>)}</ol></dd></> : null}
+          {s.evidence?.length ? <><dt>Evidence</dt><dd>{s.evidence.map((e: any) => <div>{e.claim ? `${e.claim}: ` : ''}<code>{e.source}</code></div>)}</dd></> : null}
+        </dl>
+      </li>)}</ol>
+      {plan.sources?.length ? <div class="plansrc"><h3>Sources</h3>{plan.sources.map((s: any) => <div><code>{s.path}</code>{s.use ? ` ${s.use}` : ''}</div>)}</div> : null}
+      {plan.openFeedback.length ? <div class="plansrc"><h3>Your comments</h3>{plan.openFeedback.map((f: any) => <div>{f.slide ? `${f.slide}: ` : ''}{f.text}</div>)}</div> : null}
+    </div>
+    <div class="planfoot">
+      <textarea rows={2} value={text} aria-label="Comment on the plan" placeholder={slide ? `Comment on ${slide}` : 'Ask for a change to the plan'} onInput={e => setText(e.currentTarget.value)} />
+      <button class="btn" disabled={!text.trim()} onClick={send}>Request changes</button>
+    </div>
+    {!canTalk ? <p class="plannote">An agent in a terminal reads your review the next time it calls plan_read. Tell it to continue.</p> : null}
+  </section>;
+}
+
+function tile(name: string) {
+  const e = name.split('.').pop()!.toLowerCase();
+  const cls = e === 'pdf' ? 'pdf' : ['doc', 'docx'].includes(e) ? 'doc' : ['csv', 'tsv', 'xlsx', 'json'].includes(e) ? 'data' : '';
+  return <span class={'tile ' + cls}>{e.slice(0, 4).toUpperCase()}</span>;
+}
 
 interface Ref { path: string; name: string; kind: string; bytes: number; }
 interface Item { key: string; kind: 'element' | 'capture' | 'file'; label: string; slide?: string; step?: number; id?: string; src?: string; text?: string; path?: string; ids?: string[]; }
@@ -94,8 +216,24 @@ function App() {
   const [toast, setToast] = useState('');
   const [crop, setCrop] = useState<{ url: string; img: HTMLImageElement } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const [follow, setFollow] = useState(localStorage.getItem('present-follow') !== 'off');
+  const [showing, setShowing] = useState(false);
+  const [screens, setScreens] = useState<Display[] | null>(null);
+  const [exporting, setExporting] = useState<'menu' | 'busy' | null>(null);
+  const [problemList, setProblemList] = useState<any[] | null>(null);
+  const [plan, setPlan] = useState<any>(null);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [warnings, setWarnings] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [sure, setSure] = useState('');
+  const [loaded, setLoaded] = useState<Record<string, boolean>>({});
+  const picker = useRef<HTMLInputElement>(null);
   const log = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool); toolRef.current = tool;
+  const followRef = useRef(follow); followRef.current = follow;
+  const playRef = useRef(play); playRef.current = play;
 
   const win = () => frame.current?.contentWindow as any;
   const player = () => win()?.__present;
@@ -104,21 +242,56 @@ function App() {
   const attach = (it: Item) => { setItems(l => (l.some(x => x.key === it.key) ? l : [...l, it])); };
   const refreshOutline = () => api('outline').then(setOutline).catch(fail);
   const refreshRefs = () => api('references').then(setRefs).catch(fail);
+  /** A new proposal opens itself: it is waiting on the human. */
+  const refreshPlan = (reveal = false) => api('plan').then(p => { setPlan(p); if (reveal && p?.status === 'proposed') setPlanOpen(true); }).catch(fail);
+  /** Goes to the slide an agent just changed. A new slide may not have reached the preview yet. */
+  const showEdited = (id: string, tries = 20) => {
+    const p = player()?.player;
+    if (!p) return;
+    const i = p.order.findIndex((s: any) => s.id === id);
+    if (i < 0) { if (tries) setTimeout(() => showEdited(id, tries - 1), 50); return; }
+    if (i !== p.idx) p.show(i, { instant: true });
+  };
 
   useEffect(() => {
-    refreshOutline(); refreshRefs();
+    refreshOutline(); refreshRefs(); refreshPlan();
     api('chat').then(setChat).catch(fail);
     api('agents').then((l: any[]) => {
       setAgents(l);
       setAgent(a => (l.some(x => x.id === a && x.available) ? a : l.find(x => x.available)?.id ?? ''));
     }).catch(fail);
     const es = new EventSource(`/api/events?token=${token}`);
-    es.onmessage = () => refreshOutline();
+    es.onmessage = () => { refreshOutline(); refreshPlan(); };
+    es.addEventListener('plan', () => refreshPlan(true));
     es.addEventListener('chat', (e: any) => setChat(JSON.parse(e.data)));
     es.addEventListener('refs', () => refreshRefs());
+    es.addEventListener('edited', (e: any) => { if (followRef.current && !playRef.current) showEdited(JSON.parse(e.data)); });
     return () => es.close();
   }, []);
   useEffect(() => { if (agent) localStorage.setItem('present-agent', agent); }, [agent]);
+  useEffect(() => { localStorage.setItem('present-follow', follow ? 'on' : 'off'); }, [follow]);
+  useEffect(() => {
+    desktop?.onShow(s => { setShowing(s.running); setScreens(null); });
+    desktop?.onToggle(() => toggleShowRef.current());
+    desktop?.onBegin(() => presentRef.current(1));
+  }, []);
+  useEffect(() => {
+    if (!menu) return;
+    const away = (e: Event) => { if (!(e.target as Element).closest('.menu,[aria-haspopup]')) setMenu(false); };
+    addEventListener('pointerdown', away);
+    return () => removeEventListener('pointerdown', away);
+  }, [menu]);
+  useEffect(() => {
+    if (!screens && exporting !== 'menu' && !problemList) return;
+    const away = (e: Event) => {
+      if ((e.target as Element).closest('.menu,.problems,[aria-haspopup]')) return;
+      setScreens(null); setProblemList(null); setExporting(x => (x === 'menu' ? null : x));
+    };
+    addEventListener('pointerdown', away);
+    return () => removeEventListener('pointerdown', away);
+  }, [screens, exporting, problemList]);
+  // An open list follows the deck, so a fixed problem leaves it.
+  useEffect(() => { if (problemList) api('problems').then(setProblemList).catch(fail); }, [outline?.revision]);
   useEffect(() => { log.current?.scrollTo(0, log.current.scrollHeight); }, [chat, open]);
 
   // ---- files, however they arrive
@@ -188,7 +361,48 @@ function App() {
     } catch (e) { fail(e); }
     setCrop(null);
   };
-  const go = (d: number) => { const s = player()?.state(); if (s) player().player.go(s.slide - 1 + d); };
+  const go = (d: number) => { const s = player()?.state(); if (s) player().player.show(s.slide - 1 + d); };
+
+  // ---- presenting: on the external screen if there is one, and ask only when there is a real choice
+  const startAt = useRef<number | undefined>(undefined);      // a slide to start on; otherwise the one on screen
+  const startShow = (display?: number) => { setScreens(null); desktop?.start({ display, slide: startAt.current ?? player()?.state().slide }).catch(fail); };
+  const toggleShow = () => { if (showing) desktop?.stop().catch(fail); else { startAt.current = undefined; startShow(); } };
+  const toggleShowRef = useRef(toggleShow); toggleShowRef.current = toggleShow;
+  const present = async (slide?: number) => {
+    if (showing) { toggleShow(); return; }
+    startAt.current = slide;
+    try {
+      const all = await desktop!.displays();
+      if (all.length > 1) setScreens(all); else startShow();
+    } catch (e) { fail(e); }
+  };
+
+  const presentRef = useRef(present); presentRef.current = present;
+
+  const review = async (status: string, comment?: { text: string; slide?: string }) => {
+    try {
+      setPlan(await api('plan', { status, comment }));
+      if (!chat.messages.length || chat.running || !agent) { say(status === 'approved' ? 'Plan approved' : 'Comment saved'); return; }
+      await api('chat', { agent, context: [], text: status === 'approved' ? 'The plan is approved. Build it, and keep to it.' : 'I left comments on the plan. Read them with plan_read, then write a new plan.' });
+      setPlanOpen(false); setOpen(true);
+    } catch (e) { fail(e); }
+  };
+  const save = async (format: string, steps = false) => {
+    setExporting('busy');
+    say('Exporting…');
+    try { if (await desktop!.exportDeck({ format, steps })) say('Exported'); } catch (e) { fail(e); }
+    setExporting(null);
+  };
+  const showProblems = async (slide?: number) => {
+    if (slide) player()?.player.show(slide - 1);
+    try { setProblemList(await api('problems')); } catch (e) { fail(e); }
+  };
+  /** Hands one problem to the agent, with the slide attached to the message as usual. */
+  const askToFix = (d: any) => {
+    setText(`Fix this problem on ${d.slide ?? 'the deck'}: ${d.message} ${d.fix}`);
+    setProblemList(null);
+    (document.querySelector('.composer textarea') as HTMLElement | null)?.focus();
+  };
 
   // ---- the preview: follow its slide, and pick parts out of it
   const onPreview = () => {
@@ -197,6 +411,7 @@ function App() {
       if (!w.__present) { setTimeout(ready, 40); return; }
       w.__present.player.listeners.push(setCur);
       setCur(w.__present.state());
+      setReady(true);
       const doc: Document = w.document;
       const style = doc.createElement('style');
       style.textContent = '.st-hover{outline:2px solid #0969da!important;outline-offset:2px;cursor:copy}';
@@ -228,14 +443,16 @@ function App() {
   // ---- keys, paste, drop, here and inside the preview
   const onKey = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
+    if (e.key === 'Escape') { setTool('none'); setMenu(false); return; }
     if (t.closest?.('input,textarea,select') || e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key.toLowerCase();
-    if (k === 'escape') setTool('none');
-    else if (k === 'v') setTool(x => (x === 'pick' ? 'none' : 'pick'));
+    if (k === 'v') setTool(x => (x === 'pick' ? 'none' : 'pick'));
     else if (k === 'c') setTool(x => (x === 'circle' ? 'none' : 'circle'));
     else if (k === 's') shotRef.current();
     else if (k === 'arrowright') goRef.current(1);
     else if (k === 'arrowleft') goRef.current(-1);
+    // A playing preview hears its own keys. A still one, or a key pressed out here, does not.
+    else if (k === 'p' && (t.ownerDocument === document || player()?.player.mode === 'still')) player()?.player.presenter();
   };
   const shotRef = useRef(shot); shotRef.current = shot;
   const goRef = useRef(go); goRef.current = go;
@@ -260,7 +477,8 @@ function App() {
     } catch (e) { fail(e); }
   };
   const remove = async (r: Ref) => {
-    if (!confirm(`Delete ${r.name} from this deck's references?`)) return;
+    if (sure !== r.path) { setSure(r.path); setTimeout(() => setSure(x => (x === r.path ? '' : x)), 3000); return; }
+    setSure('');
     await fetch(`/api/references?path=${encodeURIComponent(r.path)}`, { method: 'DELETE', headers: { 'x-present-token': token } });
     setItems(l => l.filter(i => i.path !== r.path));
     refreshRefs();
@@ -272,94 +490,183 @@ function App() {
   const problems = (outline?.slides ?? []).reduce((n: number, s: any) => n + s.errors, 0);
   const installed = agents.some(a => a.available);
 
+  const running = agents.find(a => a.id === chat.messages.at(-1)?.agent)?.label ?? 'Agent';
+  const label = agents.find(a => a.id === agent)?.label ?? 'No agent';
+  const X = (r: Ref) => <button class={'x' + (sure === r.path ? ' sure' : '')} aria-label={`Delete ${r.name}`} onClick={() => remove(r)}>{sure === r.path ? 'Delete?' : <Icon svg={close} />}</button>;
+  const toolBtn = (id: Tool, name: string, key: string, svg: string, tip: string) => (
+    <button class={'tool' + (tool === id ? ' on' : '')} aria-label={name} aria-pressed={tool === id} data-tip={`${tip}  (${key})`} onClick={() => setTool(t => (t === id ? 'none' : id))}><Icon svg={svg} /><span class="label">{name}</span></button>
+  );
+
   return (
-    <div class="app">
+    <div class={'app' + (desktop ? ' desktop' : '') + (desktop?.platform === 'darwin' ? ' mac' : '')}>
       <style>{CSS}</style>
+      <input ref={picker} type="file" multiple hidden aria-label="Add files" onChange={e => { addFiles([...e.currentTarget.files!]); e.currentTarget.value = ''; }} />
       <header>
-        <b>{outline?.title ?? 'Present'}</b>
-        {problems ? <span class="bad">{problems} error{problems > 1 ? 's' : ''}</span> : null}
-        <span class="grow" />
-        <button class={tool === 'pick' ? 'on' : ''} title="Click parts of the slide to attach them to the chat (V)" onClick={() => setTool(t => (t === 'pick' ? 'none' : 'pick'))}>Select <kbd>V</kbd></button>
-        <button class={tool === 'circle' ? 'on' : ''} title="Circle a region to attach a screenshot of it (C)" onClick={() => setTool(t => (t === 'circle' ? 'none' : 'circle'))}>Circle <kbd>C</kbd></button>
-        <button title="Attach a screenshot of this frame (S)" onClick={shot}>Screenshot <kbd>S</kbd></button>
-        <button title="Capture another window or screen" onClick={grabWindow}>Capture window</button>
-        <i />
-        <button title="Play the deck with its animation" class={play ? 'on' : ''} onClick={() => setPlay(p => !p)}>Play</button>
-        <button title="Timeline, text and cue timing" onClick={() => win()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'i' }))}>Inspect</button>
-        <button title="Undo the last change" onClick={() => api('undo', {}).then(r => say(r.ok ? 'Undone' : r.error)).catch(fail)}>Undo</button>
+        <div class="brand">
+          {desktop && desktop.platform !== 'darwin' ? <button class="act square" aria-label="Menu" onClick={() => desktop.menu()}><Icon svg={bars} /></button> : null}
+          <span class="mark" aria-hidden="true">P</span>
+          <span class="title">{outline?.title ?? 'Present'}</span>
+        </div>
+        <div class="tools" role="toolbar" aria-label="Tools">
+          {toolBtn('pick', 'Select', 'V', cursor, 'Click parts of the slide to attach them')}
+          {toolBtn('circle', 'Circle', 'C', loop, 'Circle a region to attach it')}
+          <button class="tool" aria-label="Screenshot" data-tip="Attach this frame  (S)" onClick={shot}><Icon svg={camera} /><span class="label">Screenshot</span></button>
+          <button class="tool" aria-label="Capture window" data-tip="Capture another window or screen" onClick={grabWindow}><Icon svg={browser} /><span class="label">Window</span></button>
+        </div>
+        <div class="actions">
+          <button class="act square" aria-label="Previous slide" disabled={!cur || cur.slide <= 1} onClick={() => go(-1)}><Icon svg={chevronLeft} /></button>
+          <span class="count">{cur ? `${cur.label ?? cur.slide} / ${(outline?.slides ?? []).filter((x: any) => !x.parent).length || cur.total}` : ''}</span>
+          <button class="act square" aria-label="Next slide" disabled={!cur || cur.slide >= cur.total} onClick={() => go(1)}><Icon svg={chevronRight} /></button>
+          <i class="sep" />
+          {plan ? <button class={'act' + (planOpen ? ' on' : '')} aria-label="Plan" aria-pressed={planOpen} data-tip="How the agent will build this deck" onClick={() => setPlanOpen(o => !o)}><Icon svg={tasklist} />Plan</button> : null}
+          <button class="act square" aria-label="Undo" data-tip="Undo the last change" onClick={() => api('undo', {}).then(r => say(r.ok ? 'Undone' : r.error)).catch(fail)}><Icon svg={undoIcon} /></button>
+          <button class={'act square' + (follow ? ' on' : '')} aria-label="Follow edits" aria-pressed={follow} data-tip="Go to the slide an agent is changing" onClick={() => setFollow(f => !f)}><Icon svg={eye} /></button>
+          <button class="act square" aria-label="Inspect" data-tip="Timeline, text and cue timing" onClick={() => win()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'i' }))}><Icon svg={sliders} /></button>
+          <button class={'act' + (play ? ' on' : '')} aria-label="Play" aria-pressed={play} onClick={() => { setReady(false); setPlay(p => !p); }}><Icon svg={play ? stop : playIcon} />{play ? 'Stop' : 'Play'}</button>
+          {desktop ? <button class="act" aria-label="Export" aria-haspopup="menu" aria-expanded={exporting === 'menu'} disabled={exporting === 'busy'} data-tip="Save as HTML, PDF or PowerPoint" onClick={() => setExporting(x => (x ? null : 'menu'))}><Icon svg={download} />Export</button> : null}
+          {exporting === 'menu' ? <div class="menu screens" role="menu">
+            <button role="menuitem" onClick={() => save('html')}><span class="grow">HTML</span><small>One file, with animation</small></button>
+            <button role="menuitem" onClick={() => save('pdf')}><span class="grow">PDF</span><small>One page per slide</small></button>
+            <button role="menuitem" onClick={() => save('pdf', true)}><span class="grow">PDF with steps</span><small>One page per step</small></button>
+            <button role="menuitem" onClick={() => save('pptx')}><span class="grow">PowerPoint</span><small>One picture per slide, with notes</small></button>
+          </div> : null}
+          {desktop && !showing ? <button class="act" aria-label="Present" aria-haspopup="menu" aria-expanded={!!screens} data-tip="Present from this slide  (F5)" onClick={() => present()}>Present</button> : null}
+          {desktop ? <button class={'act primary' + (showing ? ' on' : '')} aria-label={showing ? 'End show' : 'Start slideshow'} aria-haspopup="menu" aria-expanded={!!screens} data-tip={showing ? 'End the show  (F5)' : 'Start from the first slide'} onClick={() => present(1)}><Icon svg={screenFull} />{showing ? 'End show' : 'Start slideshow'}</button> : null}
+          {screens ? <div class="menu screens" role="menu">{[...screens].sort((a, b) => +a.primary - +b.primary).map(d => (
+            <button role="menuitem" onClick={() => startShow(d.id)}><span class="grow">{d.label}</span><small>{d.primary ? 'Main · ' : ''}{d.width}×{d.height}</small></button>))}</div> : null}
+        </div>
       </header>
 
       <nav aria-label="Slides">
+        <div class="panelhead">Slides {outline ? <small>{outline.slides.length}</small> : null}</div>
         {(outline?.slides ?? []).map((s: any, i: number) => (
-          <button class={'thumb' + (cur?.slide === i + 1 ? ' on' : '')} title={s.brief} onClick={() => player()?.player.go(i)}>
-            <img loading="lazy" alt="" src={`/api/frame?token=${token}&slide=${i + 1}&v=${outline.revision}`} />
-            <span>{i + 1}. {s.title}</span>
-            {s.errors ? <em class="bad">{s.errors}</em> : s.annotations ? <em>{s.annotations}</em> : null}
+          <button class={'thumb' + (cur?.slide === i + 1 ? ' on' : '') + (s.depth ? ' deep' : '')} style={s.depth ? `--depth:${s.depth}` : undefined} aria-label={`Slide ${s.label ?? i + 1}: ${s.title}`} aria-current={cur?.slide === i + 1} title={s.brief} onClick={() => player()?.player.show(i)}>
+            <span class="n">{s.label ?? i + 1}</span>
+            <span class={'pic' + (loaded[s.id] ? ' in' : '')}>
+              <img class={loaded[s.id] ? 'in' : ''} loading="lazy" alt="" src={`/api/frame?token=${token}&slide=${i + 1}&v=${outline.revision}`} onLoad={() => setLoaded(l => (l[s.id] ? l : { ...l, [s.id]: true }))} />
+              {s.errors ? <em class="bad" role="button" tabIndex={0} aria-label={`Show ${s.errors} error${s.errors > 1 ? 's' : ''} on slide ${i + 1}`} onClick={e => { e.stopPropagation(); showProblems(i + 1); }}>{s.errors}</em> : s.annotations ? <em>{s.annotations}</em> : null}
+            </span>
           </button>
         ))}
       </nav>
 
       <main>
         <div class="stage">
-          <iframe ref={frame} key={String(play)} title="Slide preview" src={`/?${play ? 'steps' : 'still'}#${cur?.slide ?? 1}`} onLoad={onPreview} />
+          <iframe ref={frame} class={ready ? 'in' : ''} key={String(play)} title="Slide preview" src={`/?${play ? 'steps' : 'still'}#${cur?.slide ?? 1}`} onLoad={onPreview} />
           {tool === 'circle' ? <Lasso onDone={circled} /> : null}
-          {tool !== 'none' ? <div class="hint">{tool === 'pick' ? 'Click parts to attach them. Esc when done.' : 'Draw a loop around what you mean.'}</div> : null}
+          {tool !== 'none' ? <div class="hint">{tool === 'pick' ? 'Click parts to attach them' : 'Draw a loop around what you mean'}<kbd>Esc</kbd></div> : null}
         </div>
-        <section class="dock">
+        {planOpen && plan ? <PlanView plan={plan} canTalk={!!chat.messages.length} onReview={review} onClose={() => setPlanOpen(false)} onOpen={n => { setPlanOpen(false); player()?.player.show(n - 1); }} /> : null}
+        <section class="dock" aria-label="Agent">
           {open && chat.messages.length ? (
-            <div class="log" ref={log}>
-              {chat.messages.map((m: any) => m.role === 'user'
-                ? <div class="me">{m.text}{m.context?.length ? <small>{m.context.map((c: any) => c.label).join(' · ')}</small> : null}</div>
-                : <div class="them">
-                    {(m.parts ?? []).map((p: any) => p.text ? <p>{p.text.trim()}</p> : p.tool ? <code>{p.tool}</code> : <p class="bad">{p.error}</p>)}
-                  </div>)}
-              {chat.running ? <div class="busy">Working…</div> : null}
+            <div class="log">
+              <div class="loghead">
+                <span class="grow">Chat</span>
+                {!chat.running ? <button class="ghost" onClick={() => api('chat/reset', {}).catch(fail)}>New chat</button> : null}
+                <button class="ghost square" aria-label="Hide chat" onClick={() => setOpen(false)}><Icon svg={close} /></button>
+              </div>
+              <div class="scroll" ref={log}>
+                {chat.messages.map((m: any) => m.role === 'user'
+                  ? <div class="me">{m.text}{m.context?.length ? <small>{m.context.map((c: any) => c.label).join(' · ')}</small> : null}</div>
+                  : <div class="them"><Reply parts={m.parts ?? []} /></div>)}
+                {chat.running ? <div class="busy" role="status" aria-label="Working"><i /><i /><i /></div> : null}
+              </div>
             </div>
           ) : null}
-          <div class="bar">
+          {focused && !text && !chat.messages.length && installed ? (
+            <div class="ideas">{IDEAS.map(i => <button onMouseDown={e => { e.preventDefault(); setText(i); }}>{i}</button>)}</div>
+          ) : null}
+          <div class="composer">
             {items.length ? <div class="chips">{items.map(i => (
-              <span class="chip" title={i.path ?? i.text}>
+              <div class="chip" title={i.path ?? i.text}>
                 {i.path && i.kind === 'capture' ? <img alt="" src={fileUrl(i.path)} /> : null}
-                {i.label}
-                <button aria-label={`Remove ${i.label}`} onClick={() => setItems(l => l.filter(x => x !== i))}>×</button>
-              </span>))}</div> : null}
+                <span>{i.label}</span>
+                <button aria-label={`Remove ${i.label}`} onClick={() => setItems(l => l.filter(x => x !== i))}><Icon svg={close} /></button>
+              </div>))}</div> : null}
             <textarea rows={Math.min(5, text.split('\n').length)} value={text} aria-label="Message the agent"
-              placeholder={installed ? 'Ask the agent to build or change the deck' : 'No agent found. Install Claude Code, Codex or OpenCode.'}
+              placeholder={installed ? 'Ask the agent to build or change the deck' : 'Install Claude Code, Codex or OpenCode to chat'}
+              onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
               onInput={e => setText(e.currentTarget.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
             <div class="row">
-              <select aria-label="Agent" value={agent} onChange={e => setAgent(e.currentTarget.value)}>
-                {agents.map(a => <option value={a.id} disabled={!a.available}>{a.label}{a.available ? '' : ' (not installed)'}</option>)}
-              </select>
-              {chat.messages.length ? <button class="plain" onClick={() => setOpen(o => !o)}>{open ? 'Hide' : 'Show'} chat</button> : null}
-              {chat.messages.length && !chat.running ? <button class="plain" onClick={() => api('chat/reset', {}).catch(fail)}>New chat</button> : null}
+              <button class="ghost square" aria-label="Attach files" data-tip="Attach files" onClick={() => picker.current?.click()}><Icon svg={plus} /></button>
+              <button class="ghost" aria-label="Agent" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(m => !m)}>{label}<Icon svg={chevronDown} /></button>
+              {menu ? <div class="menu" role="menu">{agents.map(a => (
+                <button role="menuitem" disabled={!a.available} onClick={() => { setAgent(a.id); setMenu(false); }}>
+                  <span class="grow">{a.label}</span>
+                  {a.id === agent ? <Icon svg={check} /> : !a.available ? <small>Not installed</small> : null}
+                </button>))}</div> : null}
+              {chat.messages.length && !open ? <button class="ghost" onClick={() => setOpen(true)}>Show chat</button> : null}
               <span class="grow" />
               {chat.running
-                ? <button class="send" onClick={() => api('chat/stop', {}).catch(fail)}>Stop</button>
-                : <button class="send" disabled={!text.trim() || !agent} onClick={send}>Send</button>}
+                ? <button class="send" aria-label="Stop" onClick={() => api('chat/stop', {}).catch(fail)}><Icon svg={stop} /></button>
+                : <button class="send" aria-label="Send" disabled={!text.trim() || !agent} onClick={send}><Icon svg={arrowUp} /></button>}
             </div>
           </div>
         </section>
       </main>
 
-      <aside>
-        <h2>References</h2>
-        <label class="add">Add files<input type="file" multiple hidden onChange={e => { addFiles([...e.currentTarget.files!]); e.currentTarget.value = ''; }} /></label>
-        <p class="tip">Drop reports, docs and data anywhere, or paste a screenshot. Click one to attach it to your next message.</p>
-        {docs.map(r => (
-          <div class={'ref' + (items.some(i => i.key === r.path) ? ' on' : '')}>
-            <button class="plain name" title={r.path} onClick={() => toggleRef(r)}>{r.name}<small>{size(r.bytes)}</small></button>
-            <button class="plain x" aria-label={`Delete ${r.name}`} onClick={() => remove(r)}>×</button>
-          </div>))}
-        {captures.length ? <h2>Screenshots</h2> : null}
-        <div class="shots">{captures.map(r => (
-          <div class={'shot' + (items.some(i => i.key === r.path) ? ' on' : '')}>
-            <button class="plain" title={r.name} onClick={() => toggleRef(r)}><img alt={r.name} loading="lazy" src={fileUrl(r.path)} /></button>
-            <button class="plain x" aria-label={`Delete ${r.name}`} onClick={() => remove(r)}>×</button>
-          </div>))}</div>
+      <aside aria-label="References">
+        <section>
+          <h2 class="head">Sources {docs.length ? <small>{docs.length}</small> : null}
+            {docs.length ? <button class="ghost square" aria-label="Add files" onClick={() => picker.current?.click()}><Icon svg={plus} /></button> : null}
+          </h2>
+          {!docs.length ? <button class="empty" onClick={() => picker.current?.click()}><Icon svg={uploadIcon} /><b>Add reports, docs and data</b>Drop them anywhere, or click to browse</button> : null}
+          {docs.map(r => {
+            const on = items.some(i => i.key === r.path);
+            return <div class={'ref' + (on ? ' on' : '')}>
+              <button class="open" aria-pressed={on} title={on ? 'Attached to your next message' : 'Attach to your next message'} onClick={() => toggleRef(r)}>
+                {tile(r.name)}<span class="meta"><b>{r.name}</b><small>{size(r.bytes)}</small></span>
+              </button>
+              <span class="check"><Icon svg={check} /></span>
+              {X(r)}
+            </div>;
+          })}
+        </section>
+        <section>
+          <h2 class="head">Screenshots {captures.length ? <small>{captures.length}</small> : null}</h2>
+          {!captures.length ? <p class="tip">Press <kbd>S</kbd> or paste an image.</p> : null}
+          <div class="shots">{captures.map(r => {
+            const on = items.some(i => i.key === r.path);
+            return <div class={'shot' + (on ? ' on' : '')}>
+              <button class="open" aria-pressed={on} title={r.name} onClick={() => toggleRef(r)}><img alt={r.name} loading="lazy" src={fileUrl(r.path)} /></button>
+              <span class="check"><Icon svg={check} /></span>
+              {X(r)}
+            </div>;
+          })}</div>
+        </section>
       </aside>
 
-      {crop ? <div class="modal">
+      <footer class="status">
+        <span class="clip">{cur ? `Slide ${cur.label ?? cur.slide}${cur.depth ? ' (deep dive)' : ` of ${(outline?.slides ?? []).filter((x: any) => !x.parent).length || cur.total}`}${cur.steps ? `, step ${cur.step} of ${cur.steps}` : ''}` : ''}</span>
+        <button class={problems ? 'fail' : 'good'} aria-haspopup="dialog" aria-expanded={!!problemList} onClick={() => (problemList ? setProblemList(null) : showProblems())}>{problems ? `${problems} error${problems > 1 ? 's' : ''}` : 'No problems'}</button>
+        {plan ? <span>Plan {plan.built} of {plan.slides.length}</span> : null}
+        <span class="grow" />
+        {showing ? <span class="busy-dot">Presenting</span> : null}
+        {chat.running ? <span class="busy-dot">{running} is working</span> : <span>{installed ? label : 'No agent installed'}</span>}
+      </footer>
+
+      {problemList ? (() => {
+        const errs = problemList.filter(d => d.severity === 'error'), warns = problemList.filter(d => d.severity !== 'error');
+        const number = (d: any) => (outline?.slides ?? []).findIndex((s: any) => s.id === d.slide) + 1;
+        const row = (d: any) => <li class={d.severity === 'error' ? 'err' : 'warn'}>
+          <button class="where" onClick={() => { const n = number(d); if (n) player()?.player.show(n - 1); }}>{number(d) ? `Slide ${number(d)}` : 'Deck'}{d.id ? ` · ${d.id}` : ''}</button>
+          <p>{d.message}</p><small>{d.fix}</small>
+          {agent ? <button class="ghost" onClick={() => askToFix(d)}>Ask the agent to fix this</button> : null}
+        </li>;
+        return <section class="problems" role="dialog" aria-label="Problems">
+          <div class="loghead"><span class="grow">Problems</span>
+            {warns.length ? <button class="ghost" onClick={() => setWarnings(w => !w)}>{warnings ? 'Hide' : 'Show'} {warns.length} warning{warns.length > 1 ? 's' : ''}</button> : null}
+            <button class="ghost square" aria-label="Close problems" onClick={() => setProblemList(null)}><Icon svg={close} /></button></div>
+          <ul>
+            {errs.map(row)}
+            {warnings ? warns.slice(0, 200).map(row) : null}
+            {!errs.length && !warnings ? <li class="none">No errors{warns.length ? '. Warnings do not stop the deck from running.' : '.'}</li> : null}
+          </ul>
+        </section>;
+      })() : null}
+
+      {crop ? <div class="modal" role="dialog" aria-label="Crop capture">
         <div class="cropper">
           <img src={crop.url} alt="Captured screen" />
           <Lasso onDone={async pts => {
@@ -367,74 +674,17 @@ function App() {
             saveCrop(await cut(crop.img, pts.map(p => ({ x: p.x * k, y: p.y * k })), false));
           }} />
         </div>
-        <p>Circle the part you want.</p>
-        <button onClick={async () => saveCrop(await (await fetch(crop.url)).blob())}>Use all of it</button>
-        <button onClick={() => setCrop(null)}>Cancel</button>
+        <div class="modalbar">
+          <span>Circle the part you want</span>
+          <button class="btn" onClick={() => setCrop(null)}>Cancel</button>
+          <button class="btn primary" onClick={async () => saveCrop(await (await fetch(crop.url)).blob())}>Use all of it</button>
+        </div>
       </div> : null}
       {dragging ? <div class="drop" onDragOver={e => e.preventDefault()} onDragLeave={() => setDragging(false)}
-        onDrop={e => { e.preventDefault(); setDragging(false); addFiles([...e.dataTransfer!.files]); }}>Drop to add to references</div> : null}
-      {toast ? <div class="toast" role="status">{toast}</div> : null}
+        onDrop={e => { e.preventDefault(); setDragging(false); addFiles([...e.dataTransfer!.files]); }}><div><Icon svg={uploadIcon} />Drop to add to references<small>They stay in this deck's folder</small></div></div> : null}
+      {toast ? <div class="toast" role="status"><Icon svg={check} />{toast}</div> : null}
     </div>
   );
 }
-
-const CSS = `
-*{box-sizing:border-box}html,body{height:100%;margin:0}
-body{font:13px/1.45 "Mona Sans",system-ui,sans-serif;color:#1f2328;background:#f6f8fa}
-button,select,textarea{font:inherit;color:inherit}
-button{padding:4px 10px;border:1px solid #d1d9e0;border-radius:6px;background:#fff;cursor:pointer}
-button:hover{background:#f3f4f6}button.on{background:#ddf4ff;border-color:#0969da;color:#0969da}
-button.plain{border:0;background:none;padding:2px 6px;color:#59636e}
-button:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid #0969da;outline-offset:1px}
-kbd{font:11px "Mona Sans Mono",monospace;color:#59636e;margin-left:3px}
-.grow{flex:1}.bad{color:#d1242f}
-.app{display:grid;height:100%;grid-template:44px minmax(0,1fr)/176px minmax(0,1fr) 264px}
-header{grid-column:1/-1;display:flex;align-items:center;gap:6px;padding:0 12px;background:#fff;border-bottom:1px solid #d1d9e0}
-header i{width:1px;height:20px;background:#d1d9e0;margin:0 4px}
-nav{overflow:auto;padding:10px;background:#fff;border-right:1px solid #d1d9e0}
-.thumb{position:relative;display:block;width:100%;padding:4px;margin-bottom:8px;text-align:left;border-color:transparent;background:none}
-.thumb.on{background:#ddf4ff;border-color:#0969da;color:inherit}
-.thumb img{display:block;width:100%;aspect-ratio:16/9;background:#eaeef2;border:1px solid #d1d9e0;border-radius:4px}
-.thumb span{display:block;margin-top:3px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.thumb em{position:absolute;top:8px;right:8px;padding:0 5px;font:600 11px "Mona Sans";border-radius:8px;background:#0969da;color:#fff}.thumb em.bad{background:#d1242f}
-main{position:relative;min-width:0;padding:14px 14px 96px}
-.stage{position:relative;height:100%;border-radius:8px;overflow:hidden;background:#eaeef2;border:1px solid #d1d9e0}
-iframe{display:block;width:100%;height:100%;border:0}
-.lasso{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
-.hint{position:absolute;top:10px;left:50%;transform:translateX(-50%);padding:3px 12px;border-radius:12px;background:#1f2328;color:#fff;font-size:12px;pointer-events:none}
-.dock{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);width:min(680px,calc(100% - 28px));display:flex;flex-direction:column;gap:8px;max-height:calc(100% - 28px);z-index:5}
-.log,.bar{background:#fff;border:1px solid #d1d9e0;border-radius:12px;box-shadow:0 6px 18px #25292e26}
-.log{flex:1;min-height:0;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
-.me{align-self:flex-end;max-width:85%;padding:6px 10px;border-radius:10px;background:#ddf4ff;white-space:pre-wrap}
-.me small{display:block;color:#59636e}
-.them{max-width:95%}.them p{margin:0 0 6px;white-space:pre-wrap}
-.them code{display:inline-block;margin:0 4px 4px 0;padding:0 6px;font:11px "Mona Sans Mono",monospace;color:#59636e;background:#f6f8fa;border:1px solid #d1d9e0;border-radius:4px}
-.busy{color:#59636e}
-.bar{padding:8px 10px}
-.bar textarea{display:block;width:100%;border:0;outline:0;resize:none;background:none;padding:2px}
-.chips{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
-.chip{display:flex;align-items:center;gap:4px;max-width:220px;padding:1px 2px 1px 6px;border-radius:6px;background:#ddf4ff;font-size:12px;white-space:nowrap;overflow:hidden}
-.chip img{height:18px;border-radius:2px}.chip button{border:0;background:none;padding:0 4px}
-.row{display:flex;align-items:center;gap:4px;margin-top:4px}
-.row select{border:1px solid #d1d9e0;border-radius:6px;background:#fff;padding:3px 4px}
-.send{background:#0969da;border-color:#0969da;color:#fff;font-weight:600}.send:hover{background:#0860ca}.send:disabled{opacity:.45;cursor:default}
-aside{overflow:auto;padding:12px;background:#fff;border-left:1px solid #d1d9e0}
-h2{margin:4px 0 8px;font:600 11px "Mona Sans Mono",monospace;letter-spacing:.08em;text-transform:uppercase;color:#59636e}
-.shots+h2,.ref+h2{margin-top:16px}
-.add{display:block;padding:6px;text-align:center;border:1px dashed #d1d9e0;border-radius:6px;cursor:pointer}.add:hover{background:#f6f8fa}
-.tip{margin:8px 0 12px;color:#59636e;font-size:12px}
-.ref{display:flex;align-items:center;border-radius:6px}.ref.on{background:#ddf4ff}
-.ref .name{flex:1;min-width:0;text-align:left;color:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ref small{margin-left:6px;color:#59636e}
-.shots{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px}
-.shot{position:relative;border:2px solid transparent;border-radius:6px}.shot.on{border-color:#0969da}
-.shot button:first-child{display:block;width:100%;padding:0}
-.shot img{display:block;width:100%;height:64px;object-fit:cover;border:1px solid #d1d9e0;border-radius:4px}
-.shot .x{position:absolute;top:2px;right:2px;padding:0 5px;background:#fffc;border-radius:4px}
-.modal{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:#1f2328cc;color:#fff}
-.modal button{color:#1f2328}.cropper{position:relative;line-height:0}.cropper img{max-width:88vw;max-height:76vh}.modal p{margin:0}
-.drop{position:fixed;inset:0;z-index:30;display:grid;place-items:center;font-size:20px;font-weight:600;color:#0969da;background:#ddf4ffe6;border:3px dashed #0969da}
-.toast{position:fixed;left:50%;top:54px;transform:translateX(-50%);z-index:40;padding:5px 14px;border-radius:8px;background:#1f2328;color:#fff}
-`;
 
 render(<App />, document.body);

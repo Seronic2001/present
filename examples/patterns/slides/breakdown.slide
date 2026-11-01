@@ -1,0 +1,14 @@
+---
+title: Where the time goes
+brief: Builds the trace bar by bar, so the slow part arrives last.
+notes: Replace with what you will say.
+score:
+  intro:
+    - use: arrive
+      on: .part
+      stagger: 340
+---
+<Header>Where the time <em>actually goes</em></Header>
+<Diagram viewBox="0 0 1600 340" alt="Bars on a shared clock, the last and longest in red">
+  <Timing id="trace" x="0" y="0" w="1600" label="Time from request" rows="First stage|0|2;Second stage|2|3;Third stage|5|2;The surprise|7|8|danger" />
+</Diagram>

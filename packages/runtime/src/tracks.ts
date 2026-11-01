@@ -63,6 +63,14 @@ const move = (dx: number, dy: number): TrackFactory => (el, a) => {
 
 const FACTORIES: Record<string, TrackFactory> = {
   fade: (el, a) => { const end = endOpacity(el), from = a.from ?? 0; return p => setOp(el, end, from + (1 - from) * p); },
+  leave: (el, a) => {                                  // the one cue whose end is not the drawing
+    const end = endOpacity(el), [x, y] = Array.isArray(a.to) ? a.to : [0, -10];
+    return p => {
+      css(el).opacity = p <= 0 ? base(el, 'opacity') : (end * (1 - p)).toFixed(3);
+      css(el).translate = p <= 0 ? base(el, 'translate') : `${(x * p).toFixed(2)}px ${(y * p).toFixed(2)}px`;
+      css(el).visibility = p >= 1 ? 'hidden' : base(el, 'visibility');
+    };
+  },
   state: (el, a) => { const cls = a.cls ?? 'off'; return p => { el.classList.toggle(cls, p < 1); }; },
   rise: move(0, 14),
   slide: move(-16, 0),
@@ -123,6 +131,48 @@ const FACTORIES: Record<string, TrackFactory> = {
       const v = from + (num - from) * p;
       const s = commas ? v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }) : v.toFixed(dec);
       el.textContent = fin.slice(0, m.index) + s + fin.slice(m.index! + m[0].length);
+    };
+  },
+  animate: (el, a) => {
+    const prop = a.style as string | undefined, attr = a.attr as string;
+    const read = () => (prop ? (el as any).style[prop] || (getComputedStyle(el) as any)[prop] : el.getAttribute(attr)) ?? '';
+    const write = (v: string | null) => {
+      if (prop) (el as any).style[prop] = v ?? '';
+      else if (v == null) el.removeAttribute(attr);
+      else el.setAttribute(attr, v);
+    };
+    const drawn = prop ? (el as any).style[prop] as string : el.getAttribute(attr);
+    const from = String(a.from ?? read()), to = String(a.to ?? read()), numbers = /-?\d*\.?\d+/g;
+    const fromN = (from.match(numbers) ?? []).map(Number), toN = to.match(numbers) ?? [];
+    return p => {
+      if (p >= 1) { write(a.to == null ? drawn : to); return; }
+      if (fromN.length !== toN.length) { write(p > 0 ? to : from); return; }   // nothing to interpolate
+      let i = 0;
+      write(to.replace(numbers, () => { const f = fromN[i], t = +toN[i++]; return String(+(f + (t - f) * p).toFixed(2)); }));
+    };
+  },
+  stream: (el, a, api) => {                            // el is the path; each particle rides a part of the run
+    const layer = api.fx(el), path = el as unknown as SVGGeometryElement, L = path.getTotalLength();
+    const n = a.n ?? 12, life = a.life ?? .45, jitter = a.jitter ?? 0, r = a.r ?? 3.4;
+    let seed = (a.seed ?? 7) >>> 0;
+    const rnd = () => { seed = (seed + 0x6D2B79F5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const dots = Array.from({ length: n }, () => {
+      const c = svgEl('circle', { r }, layer);
+      c.style.fill = tone(a.tone);
+      c.style.visibility = 'hidden';
+      return { c, start: rnd() * (1 - life), off: (rnd() * 2 - 1) * jitter };
+    });
+    return p => {
+      for (const d of dots) {
+        const q = (p - d.start) / life, on = p > 0 && p < 1 && q > 0 && q < 1;
+        d.c.style.visibility = on ? '' : 'hidden';
+        if (!on) continue;
+        const pt = path.getPointAtLength(q * L), ahead = path.getPointAtLength(Math.min(L, q * L + 1));
+        const nx = -(ahead.y - pt.y), ny = ahead.x - pt.x;
+        d.c.setAttribute('cx', (pt.x + nx * d.off).toFixed(1));
+        d.c.setAttribute('cy', (pt.y + ny * d.off).toFixed(1));
+        d.c.setAttribute('opacity', Math.min(1, Math.min(q, 1 - q) * 6).toFixed(2));
+      }
     };
   },
   tint: (el, a) => {

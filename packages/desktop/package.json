@@ -1,0 +1,7 @@
+{
+  "name": "@present/desktop",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/main.mjs",
+  "dependencies": { "@present/cli": "*" }
+}

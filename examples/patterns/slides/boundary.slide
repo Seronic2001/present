@@ -1,0 +1,13 @@
+---
+title: What surrounds it
+brief: Adds each surrounding part in turn, ending on what is blocked.
+notes: Replace with what you will say.
+score:
+  steps:
+    - over: .part
+      use: arrive
+---
+<Header>What sits <em>around</em> it</Header>
+<Diagram viewBox="0 0 1600 640" alt="A centre circle with five spokes, one marked blocked">
+  <Hub id="core" x="800" y="310" r="240" label="The system" items="First|ok;Second|ok;Third|ok;Fourth|ok;Blocked|danger" />
+</Diagram>

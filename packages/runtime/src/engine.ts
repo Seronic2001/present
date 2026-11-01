@@ -15,6 +15,8 @@ export class Engine {
   phases: Bound[][];
   loops: BoundLoop[] = [];
   spots: Record<string, Bound[]> = {};
+  actions: Record<string, Bound[]> = {};
+  acts?: Record<string, number>;      // ms into each action. Unset: the finished drawing
   windowMs: number;
   private overlay: SVGSVGElement | null = null;
   private layers = new Map<SVGSVGElement, SVGGElement>();
@@ -40,6 +42,7 @@ export class Engine {
     slide.phases.forEach((ph, i) => ph.loops.forEach(l =>
       this.loops.push({ phase: i, every: l.every, after: l.after, len: l.len, b: l.tracks.map(bind) })));
     for (const s of slide.spots) this.spots[s.id] = s.tracks.map(bind);
+    for (const a of slide.actions ?? []) this.actions[a.id] = a.tracks.map(bind);
   }
 
   private layerFor(el: Element): SVGGElement {
@@ -93,6 +96,10 @@ export class Engine {
     }
     for (const [id, list] of Object.entries(this.spots)) {
       for (const b of list) pass.push([b, id === spot ? progress(b, spotT) : 1]);
+    }
+    for (const a of this.slide.actions ?? []) {
+      const at = this.acts?.[a.id] ?? 0;
+      for (const b of this.actions[a.id]) pass.push([b, this.acts ? (at > 0 ? progress(b, at) : 0) : a.alt ? 0 : 1]);
     }
 
     if (force) {

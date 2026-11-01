@@ -1,5 +1,9 @@
 {
-  "name": "present-monorepo",
+  "name": "present",
+  "version": "0.1.0",
+  "description": "Animated slides you build with an agent",
+  "author": "Present",
+  "main": "packages/desktop/src/main.mjs",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -8,12 +12,19 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "present": "node packages/cli/src/bin.ts"
+    "present": "node packages/cli/src/bin.ts",
+    "desktop": "electron packages/desktop/src/main.mjs",
+    "package": "electron-builder --win"
   },
   "devDependencies": {
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^24.0.0",
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@present/desktop": "*"
   }
 }

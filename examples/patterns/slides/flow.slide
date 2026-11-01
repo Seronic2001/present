@@ -1,0 +1,38 @@
+---
+title: How it works
+brief: Follows the work through the system, one handoff per step.
+notes: Replace with what you will say.
+score:
+  intro:
+    - use: appear
+      on: a
+  steps:
+    - name: first handoff
+      cues:
+        - use: appear
+          on: b
+        - use: handoff
+          link: a-b
+          to: b
+    - name: second handoff
+      cues:
+        - use: appear
+          on: c
+        - use: handoff
+          link: b-c
+          to: c
+      loop:
+        every: 6000
+        cues:
+          - travel: a-b
+          - travel: b-c
+            at: 700
+---
+<Header>How the work <em>moves</em></Header>
+<Diagram viewBox="0 0 1600 420" alt="Three boxes joined left to right">
+  <Box id="a" x="0" y="130" w="400" h="160" title="Input" sub="where it starts" />
+  <Box id="b" x="600" y="130" w="400" h="160" tone="accent" title="The step that matters" sub="what it does" />
+  <Box id="c" x="1200" y="130" w="400" h="160" title="Output" sub="where it ends" />
+  <Link id="a-b" from="a" to="b" tone="accent" />
+  <Link id="b-c" from="b" to="c" tone="accent" />
+</Diagram>

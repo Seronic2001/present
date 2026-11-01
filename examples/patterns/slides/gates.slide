@@ -1,0 +1,18 @@
+---
+title: The bottleneck
+brief: Opens each gate in turn, then shows what flows through.
+notes: Replace with what you will say.
+score:
+  steps:
+    - over: .part
+      use: arrive
+      loop:
+        every: 4000
+        cues:
+          - use: flood
+            path: pass-flow
+---
+<Header>The <em>checkpoints</em> are the bottleneck</Header>
+<Diagram viewBox="0 0 1600 600" alt="A wide channel narrowing through three gates and widening again">
+  <Neck id="pass" x="0" y="0" w="1600" h="580" input="What goes in" output="What comes out" items="First gate|What it checks;Second gate|What it checks;Third gate|What it checks" />
+</Diagram>

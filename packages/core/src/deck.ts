@@ -1,25 +1,64 @@
 // A deck is a folder. This is the only module that touches it for reading.
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { extname, join, relative, resolve, sep } from 'node:path';
+import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { CompiledDeck } from './compiled.ts';
 import { compileSlide } from './compile.ts';
+import { slideLabels } from './compiled.ts';
 import type { Diagnostic } from './diagnostics.ts';
 
 const MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.gif': 'image/gif' };
 
-export interface DeckFiles { dir: string; meta: any; order: string[]; }
+export interface DeckFiles { dir: string; meta: any; order: string[]; parents: Record<string, string>; }
+
+/** slides: in deck.yaml is a tree. An entry is an id, or { id, deep: [...] }. This is it depth first. */
+function walkSlides(list: any[], order: string[], parents: Record<string, string>, parent?: string) {
+  for (const e of list ?? []) {
+    const id = String(typeof e === 'object' && e ? e.id : e).replace(/\.slide$/, '');
+    order.push(id);
+    if (parent) parents[id] = parent;
+    if (typeof e === 'object' && e?.deep) walkSlides(e.deep, order, parents, id);
+  }
+}
+/** The tree again, for deck.yaml. Siblings keep their relative order. */
+export function nestSlides(order: string[], parents: Record<string, string>): any[] {
+  const known = new Set(order), kids = new Map<string, string[]>();
+  for (const id of order) { const p = parents[id] && known.has(parents[id]) ? parents[id] : ''; kids.set(p, [...(kids.get(p) ?? []), id]); }
+  const tree = (id: string): any => (kids.get(id)?.length ? { id, deep: kids.get(id)!.map(tree) } : id);
+  return (kids.get('') ?? []).map(tree);
+}
+export const flattenSlides = (tree: any[]) => { const order: string[] = []; walkSlides(tree, order, {}); return order; };
 
 export function readDeck(dir: string): DeckFiles {
   const root = resolve(dir);
   const metaPath = join(root, 'deck.yaml');
-  if (!existsSync(metaPath)) throw new Error(`No deck.yaml in ${root}`);
+  if (!existsSync(metaPath)) throw new Error(`No deck.yaml in ${root}. Start one with deck_create, or present init.`);
   const meta = (parseYaml(readFileSync(metaPath, 'utf8')) as any) ?? {};
   const slidesDir = join(root, 'slides');
   const onDisk = existsSync(slidesDir) ? readdirSync(slidesDir).filter(f => f.endsWith('.slide')).sort().map(f => f.replace(/\.slide$/, '')) : [];
-  const order: string[] = (meta.slides ?? onDisk).map((s: string) => String(s).replace(/\.slide$/, ''));
-  return { dir: root, meta, order };
+  const order: string[] = [], parents: Record<string, string> = {};
+  walkSlides(meta.slides ?? onDisk, order, parents);
+  return { dir: root, meta, order, parents };
+}
+
+const SKIP = new Set(['node_modules', 'dist', 'build', 'release', 'target', 'vendor']);
+/** Decks in or under a folder, and any the folder sits inside: where a server started in the wrong place should be. */
+export function findDecks(dir: string, depth = 3): string[] {
+  const out: string[] = [], root = resolve(dir);
+  const down = (d: string, left: number) => {
+    let names: string[];
+    try { names = readdirSync(d); } catch { return; }
+    if (d !== root && names.includes('deck.yaml')) { out.push(d); return; }
+    if (left) for (const n of names) {
+      if (n.startsWith('.') || SKIP.has(n)) continue;
+      const p = join(d, n);
+      try { if (statSync(p).isDirectory()) down(p, left - 1); } catch { /* gone, or not ours to read */ }
+    }
+  };
+  down(root, depth);
+  for (let p = dirname(root), n = 0; n < 3 && p !== dirname(p); p = dirname(p), n++) if (existsSync(join(p, 'deck.yaml'))) out.push(p);
+  return out;
 }
 
 export const slidePath = (dir: string, id: string) => join(resolve(dir), 'slides', `${id}.slide`);
@@ -56,13 +95,22 @@ export function themeCss(dir: string): string {
   return css;
 }
 
+/** The phrases a deck defines for itself, under phrases: in deck.yaml. */
+export const deckPhrases = (dir: string): Record<string, any> => readDeck(dir).meta.phrases ?? {};
+
 export function compileDeck(dir: string, opts: { macros?: Record<string, any>; sourceMap?: boolean } = {}): { deck: CompiledDeck; diagnostics: Diagnostic[] } {
-  const { dir: root, meta, order } = readDeck(dir);
+  const { dir: root, meta, order, parents } = readDeck(dir);
   const images = (src: string) => {
     try {
       const p = confine(root, src);
       if (!existsSync(p) || !statSync(p).isFile()) return null;
       return `data:${MIME[extname(p).toLowerCase()] ?? 'application/octet-stream'};base64,${readFileSync(p).toString('base64')}`;
+    } catch { return null; }
+  };
+  const read = (src: string) => {
+    try {
+      const p = confine(root, src);
+      return /\.html?$/i.test(p) && existsSync(p) && statSync(p).isFile() ? readFileSync(p, 'utf8') : null;
     } catch { return null; }
   };
   const diagnostics: Diagnostic[] = [];
@@ -73,9 +121,14 @@ export function compileDeck(dir: string, opts: { macros?: Record<string, any>; s
       diagnostics.push({ code: 'missing-slide', severity: 'error', slide: id, message: `slides/${id}.slide does not exist`, fix: 'Create it or remove it from deck.yaml' });
       continue;
     }
-    const r = compileSlide(readFileSync(p, 'utf8').replace(/\r\n/g, '\n'), { id, images, macros: opts.macros, stepLimit: meta.stepLimit, sourceMap: opts.sourceMap });
-    slides.push(r.slide);
+    const r = compileSlide(readFileSync(p, 'utf8').replace(/\r\n/g, '\n'), { id, images, read, align: meta.align, macros: opts.macros, stepLimit: meta.stepLimit, sourceMap: opts.sourceMap, phrases: meta.phrases });
+    let depth = 0;
+    for (let p = parents[id]; p; p = parents[p]) depth++;
+    slides.push({ ...r.slide, depth, ...(parents[id] ? { parent: parents[id] } : {}) });
     diagnostics.push(...r.diagnostics);
+  }
+  for (const s of slides) for (const m of s.html.matchAll(/data-goto="([^"]*)"/g)) {
+    if (!order.includes(m[1])) diagnostics.push({ code: 'bad-goto', severity: 'error', slide: s.id, message: `goto "${m[1]}" is not a slide`, fix: 'Use the id of a slide in this deck' });
   }
   return {
     deck: {
@@ -90,11 +143,14 @@ export function compileDeck(dir: string, opts: { macros?: Record<string, any>; s
 export function deckOutline(dir: string) {
   const { deck, diagnostics } = compileDeck(dir);
   const annotations = readAnnotations(dir).filter(a => a.status === 'open');
+  const labels = slideLabels(deck.slides);
+  const time = (list: typeof deck.slides) => list.reduce((m, s) => m + s.phases.reduce((n, p) => n + p.end + deck.dwell, 0), 0);
   return {
     title: deck.title, revision: deck.revision,
-    runningTimeMs: deck.slides.reduce((m, s) => m + s.phases.reduce((n, p) => n + p.end + deck.dwell, 0), 0),
+    runningTimeMs: time(deck.slides.filter(s => !s.parent)),     // the main path: deep dives are optional
+    deepDiveMs: time(deck.slides.filter(s => s.parent)),
     slides: deck.slides.map(s => ({
-      id: s.id, title: s.title, brief: s.brief, steps: s.phases.length - 1,
+      id: s.id, label: labels.get(s.id), parent: s.parent, depth: s.depth ?? 0, title: s.title, brief: s.brief, steps: s.phases.length - 1,
       phaseMs: s.phases.map(p => p.end), spots: s.spots.map(x => x.id),
       errors: diagnostics.filter(d => d.slide === s.id && d.severity === 'error').length,
       warnings: diagnostics.filter(d => d.slide === s.id && d.severity === 'warning').length,

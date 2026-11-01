@@ -1,0 +1,14 @@
+---
+title: The one idea
+brief: States the idea plainly.
+notes: Replace with what you will say.
+score:
+  intro:
+    - rise: sub
+      at: 700
+---
+<Center>
+  <Eyebrow>Your event</Eyebrow>
+  <Title>The one idea, <em>said plainly</em></Title>
+  <Sub id="sub">What the room should leave with.</Sub>
+</Center>

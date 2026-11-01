@@ -1,0 +1,22 @@
+---
+title: Finding the way up
+brief: Brings up the landscape, then climbs it to the goal.
+notes: Replace with what you will say.
+score:
+  intro:
+    - use: survey
+  steps:
+    - name: keep climbing
+      cues:
+        - hot: goal-note
+      loop:
+        every: 4000
+        cues:
+          - use: flood
+            path: map-climb
+---
+<Header>Set the goal, and let it <em>climb</em></Header>
+<Diagram viewBox="0 0 1600 600" alt="Contour lines around a summit, with a path climbing to it">
+  <Terrain id="map" x="100" y="0" w="1400" h="580" label="Goal" />
+  <Label id="goal-note" x="100" y="40">The landscape</Label>
+</Diagram>

@@ -1,10 +1,12 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { chromium } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { addAnnotation, applyOps, readAnnotations, revisionOf } from '@present/core';
+import { addAnnotation, addFromLibrary, applyOps, harvest, listLibrary, planMarkdown, planProgress, readAnnotations, reviewPlan, revisionOf, savePlan, saveToLibrary } from '@present/core';
+import { claudeArgs, codexArgs, connectDeck } from '@present/mcp';
 import { startDev } from '@present/studio';
 import { tempDeck } from './helpers.ts';
 
@@ -14,7 +16,7 @@ describe('MCP', () => {
   const call = async (name: string, args: any = {}) => client.callTool({ name, arguments: args }) as Promise<any>;
   const json = (r: any) => JSON.parse(r.content.find((c: any) => c.type === 'text').text);
   beforeAll(async () => {
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve('packages/cli/src/bin.ts'), 'mcp', t.dir], stderr: 'ignore' }));
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve('packages/mcp/src/bin.ts'), t.dir], env: process.env as Record<string, string>, stderr: 'ignore' }));
   }, 30000);
   afterAll(async () => { await client.close(); t.done(); });
 
@@ -41,9 +43,191 @@ describe('MCP', () => {
     expect(film.content[0].type).toBe('image');
     expect(json(await call('deck_undo')).ok).toBe(true);
   }, 60000);
+  it('gives agents the patterns, and renders one they add', async () => {
+    const cat = json(await call('catalog'));
+    expect(cat.patterns.length).toBeGreaterThan(5);
+    expect((await call('pattern_read', { name: 'gates' })).content[0].text).toContain('<Neck');
+    const { revision } = json(await call('deck_outline'));
+    expect(json(await call('deck_apply', { baseRevision: revision, ops: [{ op: 'addSlide', id: 'gates', pattern: 'gates' }] })).ok).toBe(true);
+    const seen = await call('slide_render', { slide: 'gates' });
+    expect(JSON.parse(seen.content[1].text).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+    expect(json(await call('deck_undo')).ok).toBe(true);
+  }, 60000);
   it('refuses to export outside the deck', async () => {
     const r = await call('deck_export', { format: 'html', out: '../escape.html' });
     expect(r.isError).toBe(true);
+  });
+});
+
+describe('the library, across two projects', () => {
+  const a = tempDeck(), b = tempDeck();
+  const lib = mkdtempSync(join(tmpdir(), 'present-lib-')), was = process.env.PRESENT_LIBRARY;
+  const macro = `// A labelled note\nexport default { doc: 'A labelled note', props: 'id', example: '', html: (a) => '<div id="' + a.id + '" class="note"><slot/></div>' };\n`;
+  const client = new Client({ name: 'test', version: '1' });
+  const call = async (name: string, args: any = {}) => client.callTool({ name, arguments: args }) as Promise<any>;
+  const json = (r: any) => JSON.parse(r.content.find((c: any) => c.type === 'text').text);
+  beforeAll(() => {
+    process.env.PRESENT_LIBRARY = lib;
+    mkdirSync(join(a.dir, 'macros')); mkdirSync(join(a.dir, 'tracks'));
+    writeFileSync(join(a.dir, 'macros', 'Note.ts'), macro);
+    writeFileSync(join(a.dir, 'tracks', 'nudge.ts'), '// Nudges a part\nexport default (el: any) => (p: number) => { el.style.opacity = String(p); };\n');
+    writeFileSync(join(a.dir, 'deck.yaml'), readFileSync(join(a.dir, 'deck.yaml'), 'utf8') + '\nphrases:\n  beat:\n    doc: A small beat\n    cues:\n      - track: nudge\n        target: $\n');
+    writeFileSync(join(a.dir, 'slides', 'keep.slide'), '---\ntitle: t\nbrief: b\nscore:\n  intro:\n    - use: beat\n      on: n\n---\n<Note id="n">Hi</Note>\n');
+    writeFileSync(join(a.dir, 'deck.yaml'), readFileSync(join(a.dir, 'deck.yaml'), 'utf8').replace('06-close', '06-close\n  - keep'));
+  });
+  afterAll(async () => { await client.close(); process.env.PRESENT_LIBRARY = was; a.done(); b.done(); rmSync(lib, { recursive: true, force: true }); });
+
+  it('saves what a deck defined with no one asking, and marks code as code', () => {
+    const names = harvest(a.dir).map(i => i.name).sort();
+    expect(names).toEqual(['Note', 'beat', 'nudge'].sort());
+    expect(listLibrary().find(i => i.name === 'Note')).toMatchObject({ auto: true, code: true, doc: 'A labelled note', from: a.dir });
+    expect(listLibrary().find(i => i.name === 'beat')).toMatchObject({ tracks: ['nudge'] });
+    expect(harvest(a.dir)).toEqual([]);          // nothing changed, nothing saved
+  });
+  it('gathers everything a saved slide depends on, and it works in another deck', () => {
+    const item = saveToLibrary(a.dir, { name: 'note-card', doc: 'A note that nudges in', slide: 'keep' });
+    expect(item).toMatchObject({ macros: ['Note'], tracks: ['nudge'], phrases: ['beat'], slide: true, auto: false });
+    const got = addFromLibrary(b.dir, 'note-card');
+    expect(got.added).toEqual(expect.arrayContaining(['macros/Note.ts', 'tracks/nudge.ts', 'phrase beat']));
+    expect(readFileSync(join(b.dir, 'macros', 'Note.ts'), 'utf8')).toBe(macro);
+  });
+  it('never overwrites what a deck changed, unless told to', () => {
+    writeFileSync(join(b.dir, 'macros', 'Note.ts'), macro + '// mine\n');
+    expect(() => addFromLibrary(b.dir, 'note-card')).toThrow('its own version');
+    expect(readFileSync(join(b.dir, 'macros', 'Note.ts'), 'utf8')).toContain('mine');
+    addFromLibrary(b.dir, 'note-card', { overwrite: true });
+    expect(readFileSync(join(b.dir, 'macros', 'Note.ts'), 'utf8')).not.toContain('mine');
+  });
+  it('gives another deck\'s different component its own name', () => {
+    harvest(b.dir);
+    expect(listLibrary().filter(i => i.name === 'Note' && i.from === a.dir)).toHaveLength(1);
+  });
+  it('respects a deck that opts out, and refuses names that leave the library', () => {
+    const c = tempDeck();
+    mkdirSync(join(c.dir, 'tracks'));
+    writeFileSync(join(c.dir, 'tracks', 'secret.ts'), 'export default () => () => {};\n');
+    writeFileSync(join(c.dir, 'deck.yaml'), readFileSync(join(c.dir, 'deck.yaml'), 'utf8') + '\nlibrary: false\n');
+    expect(harvest(c.dir)).toEqual([]);
+    expect(() => saveToLibrary(c.dir, { name: '../evil', doc: 'x', tracks: ['secret'] })).toThrow('Bad library name');
+    c.done();
+  });
+  it('is one MCP call from a fresh deck to a rendered slide, in the same session', async () => {
+    const fresh = tempDeck();
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve('packages/mcp/src/bin.ts'), fresh.dir], env: process.env as Record<string, string>, stderr: 'ignore' }));
+    expect(json(await call('catalog')).library.map((i: any) => i.name)).toContain('note-card');
+    const r = json(await call('library_add', { name: 'note-card', slideId: 'reused' }));
+    expect(r.slideAdded).toBe('reused');
+    const seen = await call('slide_render', { slide: 'reused' });
+    expect(JSON.parse(seen.content[1].text).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+    fresh.done();
+  }, 60000);
+});
+
+describe('planning', () => {
+  const slide = { id: 'proof', title: 'We gained 0.43', claim: 'It worked', pattern: 'evidence' };
+  it('catches a plan that cannot be built, and a number with no source', () => {
+    const t = tempDeck();
+    const bad = savePlan(t.dir, { goal: 'g', slides: [{ ...slide, pattern: 'nope' }, { ...slide, id: 'x', pattern: undefined, component: 'missing' }] });
+    expect(bad.ok).toBe(false);
+    expect(bad.issues.filter(i => i.severity === 'error')).toHaveLength(2);
+    expect(existsSync(join(t.dir, 'plan.yaml'))).toBe(false);
+    const warned = savePlan(t.dir, { goal: 'g', minutes: 1, slides: [slide, { ...slide, id: 'b' }, { ...slide, id: 'c' }] });
+    expect(warned.ok).toBe(true);
+    expect(warned.issues.map(i => i.message).join()).toContain('no evidence');
+    expect(warned.issues.map(i => i.message).join()).toContain('1 minute slot');
+    t.done();
+  });
+  it('goes back to review when rewritten, and keeps comments until they are dealt with', () => {
+    const t = tempDeck(), plan = { goal: 'g', slides: [{ ...slide, evidence: [{ source: 'evals.csv' }] }] };
+    savePlan(t.dir, plan);
+    reviewPlan(t.dir, 'approved');
+    const c = reviewPlan(t.dir, 'changes', { text: 'More', slide: 'proof' }).feedback[0];
+    savePlan(t.dir, plan);
+    expect(planProgress(t.dir)).toMatchObject({ status: 'proposed', openFeedback: [{ text: 'More' }] });
+    savePlan(t.dir, plan, [c.id]);
+    expect(planProgress(t.dir)?.openFeedback).toEqual([]);
+    t.done();
+  });
+  it('reports what is built, what is missing, and what nobody planned', () => {
+    const t = tempDeck();
+    savePlan(t.dir, { goal: 'g', slides: [{ id: '01-title', title: 'a', claim: 'b' }, { id: 'later', title: 'c', claim: 'd' }] });
+    const p = planProgress(t.dir)!;
+    expect(p.slides.map(s => s.state)).toEqual(['built', 'planned']);
+    expect(p.built).toBe(1);
+    expect(p.unplanned).toContain('02-why-it-fails');
+    expect(planMarkdown(p)).toContain('[x] 1. a');
+    t.done();
+  });
+  it('lets an agent in a project with no deck create one, plan it and build from it', async () => {
+    const project = mkdtempSync(join(tmpdir(), 'present-project-'));
+    writeFileSync(join(project, 'evals.csv'), 'run,score\n1,0.52\n');
+    const c = new Client({ name: 'test', version: '1' });
+    const call = (name: string, args: any = {}) => c.callTool({ name, arguments: args }) as Promise<any>;
+    await c.connect(new StdioClientTransport({ command: process.execPath, args: [resolve('packages/mcp/src/bin.ts'), project], env: process.env as Record<string, string>, stderr: 'ignore' }));
+    const first = await call('catalog');                 // the guide says to read it first, so it must work with no deck
+    expect(first.isError).toBeFalsy();
+    expect(JSON.parse(first.content[0].text).next).toContain('deck_create');
+    expect(first.content.at(-1).text).toContain('Not a deck');
+    expect((await call('deck_outline')).content[0].text).toContain('deck_create');
+    expect(JSON.parse((await call('deck_create', { title: 'My eval results' })).content[0].text).deck).toBe(join(project, 'presentation'));
+    const shown = await call('plan_write', { goal: 'Show the results', sources: [{ path: '../evals.csv', use: 'scores' }], slides: [{ id: 'result', title: 'Scores rose', claim: 'Training worked', pattern: 'evidence', animation: ['Line draws'], evidence: [{ source: '../evals.csv:2' }] }] });
+    expect(shown.content[0].text.length).toBeLessThan(400);   // it does not echo the plan back
+    const patched = JSON.parse((await call('plan_patch', { minutes: 5, slides: [{ id: 'result', claim: 'Training clearly worked' }] })).content[0].text);
+    expect(patched).toMatchObject({ ok: true, slides: 1 });
+    const plan = (await call('plan_read')).content[0].text;
+    expect(plan).toContain('Beat 1: Line draws');
+    expect(plan).toContain('Training clearly worked');
+    const { revision } = JSON.parse((await call('deck_outline')).content[0].text);
+    expect(JSON.parse((await call('deck_apply', { baseRevision: revision, ops: [{ op: 'addSlide', id: 'result', pattern: 'evidence' }] })).content[0].text).ok).toBe(true);
+    expect((await call('plan_read')).content[0].text).toContain('[x] 1. Scores rose');
+    mkdirSync(join(project, 'presentation', 'macros'));          // written directly, with no deck_apply after it
+    const byHand = `ByHand${Date.now()}`;                         // the test library outlives a run
+    writeFileSync(join(project, 'presentation', 'macros', `${byHand}.mjs`), "export default { doc: 'Written by hand', props: '', example: '', html: () => '<p>x</p>' };");
+    const checked = JSON.parse((await call('deck_check')).content[0].text);
+    expect(checked.library.savedNow).toContain(byHand);
+    expect(checked.library.saved).toContain(byHand);
+    expect((await call('deck_outline')).content.at(-1).text).toBe('deck: ' + join(project, 'presentation'));
+    await c.close();
+
+    // The wrong folder: the deck is just below it, and must be found rather than made again.
+    const d = new Client({ name: 'test', version: '1' });
+    const on = (name: string, args: any = {}) => d.callTool({ name, arguments: args }) as Promise<any>;
+    await d.connect(new StdioClientTransport({ command: process.execPath, args: [resolve('packages/mcp/src/bin.ts'), project], env: process.env as Record<string, string>, stderr: 'ignore' }));
+    const read = await on('plan_read');
+    expect(read.content.at(-1).text).toContain('Decks nearby: ' + join(project, 'presentation'));
+    const made = await on('deck_create');
+    expect(made.isError).toBe(true);
+    expect(made.content[0].text).toContain('deck_open');
+    expect(JSON.parse((await on('deck_open', { path: 'presentation' })).content[0].text).slides).toBe(2);
+    expect((await on('plan_read')).content[0].text).toContain('Scores rose');
+    await d.close();
+    rmSync(project, { recursive: true, force: true });
+  }, 60000);
+});
+
+describe('connecting agents', () => {
+  const t = tempDeck();
+  afterAll(() => t.done());
+
+  it('points Claude Code at the server, keeps other servers, and can run again', () => {
+    writeFileSync(join(t.dir, '.mcp.json'), JSON.stringify({ mcpServers: { other: { command: 'x' } } }));
+    connectDeck(t.dir);
+    connectDeck(t.dir);
+    const { mcpServers } = JSON.parse(readFileSync(join(t.dir, '.mcp.json'), 'utf8'));
+    expect(mcpServers.other).toEqual({ command: 'x' });
+    expect(mcpServers.present.args).toEqual([expect.stringMatching(/packages[\\/]mcp[\\/]src[\\/]bin\.ts$/), t.dir]);
+  });
+  it('will not replace a config it cannot read', () => {
+    writeFileSync(join(t.dir, '.mcp.json'), '{ broken');
+    expect(() => connectDeck(t.dir)).toThrow();
+    expect(readFileSync(join(t.dir, '.mcp.json'), 'utf8')).toBe('{ broken');
+  });
+  it('gives Claude Code a user-level entry too, for a project with no deck yet', () => {
+    expect(claudeArgs({ command: 'node', args: ['bin.ts', 'deck'] })).toEqual(['mcp', 'add', '--scope', 'user', 'present', '--', 'node', 'bin.ts']);
+  });
+  it('gives Codex one entry that follows the folder, and the app runs it as Node', () => {
+    const args = codexArgs({ command: 'present.exe', args: ['bin.ts', 'deck'], env: { ELECTRON_RUN_AS_NODE: '1' } });
+    expect(args).toEqual(['mcp', 'add', '--env', 'ELECTRON_RUN_AS_NODE=1', 'present', '--', 'present.exe', 'bin.ts']);
   });
 });
 

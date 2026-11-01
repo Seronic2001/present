@@ -2,10 +2,11 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import { addReference, compileDeck, imageMime, listReferences, readReference, referenceFile, removeReference } from '@present/core';
+import { mcpLaunch } from '@present/mcp';
 import { fontCss, Renderer } from '@present/render';
 import { AGENT_LABEL, AGENTS, Chat, onPath, type AgentId, type Invocation } from './agents.ts';
 
@@ -30,8 +31,7 @@ function rawBody(req: IncomingMessage) {
 
 export function studioApi(root: string, broadcast: (event: string, data: unknown) => void, opts: StudioOptions = {}) {
   const renderer = new Renderer(root);
-  const cli = resolve(here, '../../cli/src/bin.ts');
-  const chat = new Chat(root, { command: process.execPath, args: [cli, 'mcp', root] }, s => broadcast('chat', s), opts.resolveCmd);
+  const chat = new Chat(root, mcpLaunch(root), s => broadcast('chat', s), opts.resolveCmd);
   const available = opts.available ?? AGENTS.filter(a => onPath(a));
 
   // One headless page, so frames take turns. Slides that did not change keep their picture.
@@ -79,9 +79,9 @@ export function studioApi(root: string, broadcast: (event: string, data: unknown
     }
     if (get && p === '/api/reference-file') {
       // Uploads are untrusted. Only raster images display; anything else downloads, and nothing here can script this origin.
-      const path = q.get('path') ?? '', mime = imageMime(path);
-      res.writeHead(200, { 'content-type': mime ?? 'application/octet-stream', 'x-content-type-options': 'nosniff', 'content-security-policy': "sandbox; default-src 'none'", ...(mime ? {} : { 'content-disposition': 'attachment' }) });
-      res.end(readFileSync(referenceFile(root, path)));
+      const path = q.get('path') ?? '', mime = imageMime(path), file = readFileSync(referenceFile(root, path));
+      res.writeHead(200,{ 'content-type': mime ?? 'application/octet-stream', 'x-content-type-options': 'nosniff', 'content-security-policy': "sandbox; default-src 'none'", ...(mime ? {} : { 'content-disposition': 'attachment' }) });
+      res.end(file);
       return true;
     }
     if (get && p === '/api/reference-text') { json(res, 200, await readReference(root, q.get('path') ?? '', { offset: num('offset'), limit: num('limit') })); return true; }
@@ -102,10 +102,10 @@ export function studioApi(root: string, broadcast: (event: string, data: unknown
   async function page(token: string, title: string) {
     const r = await esbuild.build({
       entryPoints: [join(here, 'shell.tsx')], bundle: true, format: 'iife', minify: true, write: false,
-      jsx: 'automatic', jsxImportSource: 'preact', logLevel: 'silent',
+      jsx: 'automatic', jsxImportSource: 'preact', logLevel: 'silent', loader: { '.svg': 'text', '.css': 'text' },
     });
     const esc = title.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc} · Present Studio</title><style>${fontCss()}</style></head>
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc} · Present Studio</title><link rel="icon" href="data:,"><style>${fontCss()}</style></head>
 <body><script>window.__PRESENT_DEV=${JSON.stringify({ token })}</script><script>${r.outputFiles[0].text.replace(/<\/script/gi, '<\\/script')}</script></body></html>`;
   }
 

@@ -1,0 +1,13 @@
+---
+title: The talk in four parts
+brief: Shows the order of the talk, one part at a time.
+notes: Replace with what you will say.
+score:
+  steps:
+    - over: .part
+      use: arrive
+---
+<Header>The talk in <em>four parts</em></Header>
+<Diagram viewBox="0 0 1600 560" alt="A rising line through four stops, each with a card">
+  <Milestones id="plan" x="0" y="60" w="1600" h="440" rise="120" items="First|What this part covers;Second|What this part covers;Third|What this part covers;Fourth|What this part covers" />
+</Diagram>

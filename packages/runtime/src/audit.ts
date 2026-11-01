@@ -2,7 +2,7 @@
 export interface Issue { code: string; severity: 'error' | 'warning'; id?: string; message: string; fix: string; }
 export interface Box { id: string; x: number; y: number; w: number; h: number; }
 
-const SAFE = 24, MIN_PX = 12;
+const SAFE = 24, MIN_PX = 12, EDGE = 6, EDGE_Y = 4;
 const nameOf = (el: Element): string | undefined => el.closest('[id]')?.id || undefined;
 const rgba = (s: string): [number, number, number, number] | null => {
   const m = s.match(/rgba?\(([^)]+)\)/);
@@ -42,9 +42,24 @@ export function audit(root: HTMLElement, stageScale: number): { issues: Issue[];
   });
   const faint = getComputedStyle(document.documentElement).getPropertyValue('--faint').trim();
 
-  const texts: { el: Element; r: ReturnType<typeof toStage>; text: string }[] = [];
+  // What text sits on: any card or box, whether the text is inside it in the markup or only drawn over it.
+  const plates = [...root.querySelectorAll('[data-box] > rect, rect.card')].filter(e => !e.closest('[data-leaves]')).map(e => ({ e, r: toStage(e.getBoundingClientRect()) }));
+  const plateFor = (r: ReturnType<typeof toStage>) => {
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    return plates.filter(p => cx > p.r.x && cx < p.r.x + p.r.w && cy > p.r.y && cy < p.r.y + p.r.h).sort((p, q) => p.r.w * p.r.h - q.r.w * q.r.h)[0];
+  };
+  // A block's own box is as wide as its column, so measure the words in it.
+  const inked = (el: Element) => {
+    if (el instanceof SVGElement) return toStage(el.getBoundingClientRect());
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return toStage(range.getBoundingClientRect());
+  };
+  const texts: { el: Element; r: ReturnType<typeof toStage>; text: string; plate?: Element; ink: ReturnType<typeof toStage>; size: string }[] = [];
   const candidates = [...root.querySelectorAll('text, h1, h2, h3, p, span, li, div, em, code, td, th')].filter(el => {
-    if (el.closest('.fx') || el.closest('defs')) return false;
+    if (el.closest('.fx') || el.closest('defs') || el.closest('[data-leaves]')) return false;
+    const math = el.closest('.katex');                 // a formula is one thing, not its stacked glyphs
+    if (math) return el === math;
     if (el instanceof SVGElement) return el.tagName === 'text';
     return [...el.childNodes].some(n => n.nodeType === 3 && n.textContent!.trim());
   });
@@ -60,7 +75,15 @@ export function audit(root: HTMLElement, stageScale: number): { issues: Issue[];
     if (cs.opacity === '0' || cs.visibility === 'hidden') {
       add({ code: 'never-visible', severity: 'error', id: nameOf(el), message: `"${text.slice(0, 40)}" is hidden at rest`, fix: 'The drawing must show the finished state' });
     }
-    texts.push({ el, r, text });
+    const ink = inked(el), plate = plateFor(ink);
+    texts.push({ el, r, text, plate: plate?.e, ink, size: cs.fontSize });
+    if (plate && (ink.x < plate.r.x + EDGE || ink.x + ink.w > plate.r.x + plate.r.w - EDGE)) {
+      add({ code: 'text-tight', severity: 'warning', id: nameOf(el), message: `"${text.slice(0, 40)}" is ${Math.max(0, Math.round(Math.min(ink.x - plate.r.x, plate.r.x + plate.r.w - ink.x - ink.w)))}px from the edge of its box`, fix: 'Shorten it, reduce its size, or widen the box' });
+    } else if (plate) {
+      // Line boxes are taller than the letters, so measure the letters.
+      const top = ink.y + ink.h * .2, bottom = ink.y + ink.h * .85;
+      if (top < plate.r.y + EDGE_Y || bottom > plate.r.y + plate.r.h - EDGE_Y) add({ code: 'text-tight', severity: 'warning', id: nameOf(el), message: `"${text.slice(0, 40)}" sits against the top or bottom of its box`, fix: 'Move it inward, or make the box taller' });
+    }
 
     let px = parseFloat(cs.fontSize);
     const svg = (el as SVGElement).ownerSVGElement;
@@ -97,7 +120,7 @@ export function audit(root: HTMLElement, stageScale: number): { issues: Issue[];
     }
   }
   // HTML containers clipping or spilling their content
-  for (const el of root.querySelectorAll<HTMLElement>('.p-card, .p-stack, .p-columns, .p-grid, .p-row')) {
+  for (const el of root.querySelectorAll<HTMLElement>('.p-card, .p-stack, .p-columns, .p-grid, .p-row, .p-textblock[data-fit]')) {
     if (el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2) {
       add({ code: 'text-overflow', severity: 'error', id: nameOf(el), message: 'Content is larger than its container', fix: 'Cut content, or give the container more room' });
     }
@@ -111,6 +134,9 @@ export function audit(root: HTMLElement, stageScale: number): { issues: Issue[];
       const h = Math.min(a.r.y + a.r.h, b.r.y + b.r.h) - Math.max(a.r.y, b.r.y);
       if (w > 2 && h > 2 && w * h > .25 * Math.min(a.r.w * a.r.h, b.r.w * b.r.h)) {
         add({ code: 'text-overlap', severity: 'error', id: nameOf(a.el), message: `"${a.text.slice(0, 30)}" overlaps "${b.text.slice(0, 30)}"`, fix: 'Move one of them' });
+      } else if (a.plate && a.plate === b.plate && a.size !== b.size && w > 2 && h > 0) {
+        // Too little to call an overlap, but on one card a label and its text should not share a line box.
+        add({ code: 'text-crowded', severity: 'warning', id: nameOf(a.el), message: `"${a.text.slice(0, 30)}" crowds "${b.text.slice(0, 30)}"`, fix: 'Move one of them, or make the box taller' });
       }
     }
   }

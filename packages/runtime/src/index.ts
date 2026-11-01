@@ -1,6 +1,7 @@
 // Browser entry: boots the player from the compiled deck embedded in the page.
 import type { CompiledDeck } from '../../core/src/compiled.ts';
-import { Player, presenterView, type SeekTarget } from './player.ts';
+import { Player, type SeekTarget } from './player.ts';
+import { presenterView } from './presenter.ts';
 import { registerTrack, type TrackFactory } from './tracks.ts';
 
 declare global {
@@ -34,4 +35,6 @@ export function boot(deck: CompiledDeck) {
 }
 
 const el = document.getElementById('present-deck');
-if (el) addEventListener('DOMContentLoaded', () => { document.fonts.ready.finally(() => boot(JSON.parse(el.textContent!))); });
+// Maths fonts are loaded up front: a font fetched on first use would land after a screenshot, or mid-talk.
+const mathFonts = () => Promise.allSettled([...document.fonts].filter(f => f.family.includes('KaTeX')).map(f => f.load()));
+if (el) addEventListener('DOMContentLoaded', () => { mathFonts().then(() => document.fonts.ready).finally(() => boot(JSON.parse(el.textContent!))); });

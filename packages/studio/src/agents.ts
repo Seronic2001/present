@@ -11,7 +11,7 @@ export const AGENTS = ['claude', 'codex', 'opencode'] as const;
 export type AgentId = typeof AGENTS[number];
 export const AGENT_LABEL: Record<AgentId, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' };
 
-export interface Mcp { command: string; args: string[]; }
+export interface Mcp { command: string; args: string[]; env?: Record<string, string>; }
 export interface Invocation { cmd: string; args: string[]; env?: Record<string, string>; }
 export interface AgentEvent { session?: string; text?: string; tool?: string; error?: string; }
 
@@ -42,14 +42,15 @@ export function invocation(agent: AgentId, root: string, mcp: Mcp, session?: str
       `mcp_servers.present.command=${JSON.stringify(mcp.command)}`,
       `mcp_servers.present.args=${JSON.stringify(mcp.args)}`,
       'mcp_servers.present.default_tools_approval_mode="approve"',
+      ...Object.entries(mcp.env ?? {}).map(([k, v]) => `mcp_servers.present.env.${k}=${JSON.stringify(v)}`),
     ].flatMap(c => ['-c', c]);
     return { cmd: 'codex', args: ['exec', ...(session ? ['resume', session] : []), '--json', '--skip-git-repo-check', ...config, '-'] };
   }
   return {
     cmd: 'opencode',
-    args: ['run', '--format', 'json', '--auto', ...(session ? ['--session', session] : [])],
-    // --auto approves everything not denied here.
-    env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: { present: { type: 'local', command: [mcp.command, ...mcp.args] } }, permission: { edit: 'deny', bash: 'deny' } }) },
+    args: ['run', '--format', 'json', '--auto', '--standalone', ...(session ? ['--session', session] : [])],
+    // --auto approves everything not denied here. --standalone gives the run a private server, so Stop ends it.
+    env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: { present: { type: 'local', command: [mcp.command, ...mcp.args], environment: mcp.env } }, permission: { edit: 'deny', bash: 'deny', external_directory: 'deny' } }) },
   };
 }
 
@@ -129,9 +130,14 @@ export class Chat {
   private child: ChildProcess | null = null;
   private timer: NodeJS.Timeout | undefined;
   private file: string;
+  private root: string;
+  private notify: (s: ChatState) => void;
+  private resolveCmd: (agent: AgentId, session?: string) => Invocation;
 
-  constructor(private root: string, private mcp: Mcp, private notify: (s: ChatState) => void,
-    private resolveCmd: (agent: AgentId, session?: string) => Invocation = (a, s) => invocation(a, root, mcp, s)) {
+  constructor(root: string, mcp: Mcp, notify: (s: ChatState) => void, resolveCmd?: (agent: AgentId, session?: string) => Invocation) {
+    this.root = root;
+    this.notify = notify;
+    this.resolveCmd = resolveCmd ?? ((a, s) => invocation(a, root, mcp, s));
     this.file = join(root, '.present', 'chat.json');
     if (existsSync(this.file)) try { this.state = { ...JSON.parse(readFileSync(this.file, 'utf8')), running: false }; } catch { /* a damaged log is not worth stopping for */ }
   }
@@ -180,6 +186,7 @@ export class Chat {
     const finish = (problem?: string) => {
       if (ended) return;
       ended = true;
+      if (this.child !== child) return;   // reset while running: this run is no longer the chat's
       if (problem) add({ error: problem });
       this.child = null;
       this.state.running = false;
@@ -210,6 +217,7 @@ export class Chat {
   }
   reset() {
     this.stop();
+    this.child = null;
     this.state = { messages: [], running: false, sessions: {} };
     this.save();
     this.changed(true);

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Choose what to capture</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<style>
+*{box-sizing:border-box}html,body{margin:0}
+body{padding:16px;font:13px/1.5 "Segoe UI",system-ui,sans-serif;color:#ececee;background:#161618}
+#grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+a{display:block;min-width:0;padding:6px;color:inherit;text-decoration:none;border-radius:8px}
+a:hover{background:#26262a}a:focus-visible{outline:2px solid #6f7ef5}
+img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#1c1c1f;border-radius:4px}
+span{display:block;margin-top:4px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style></head>
+<body><div id="grid"></div>
+<script>
+function show(sources) {
+  const grid = document.getElementById('grid');
+  for (const s of sources) {
+    const a = document.createElement('a'), i = document.createElement('img'), t = document.createElement('span');
+    a.href = 'present-app://pick/' + encodeURIComponent(s.id);
+    i.src = s.thumb; i.alt = ''; t.textContent = s.name;
+    a.append(i, t); grid.append(a);
+  }
+}
+</script>
+</body></html>

@@ -1,0 +1,24 @@
+---
+title: Not this, but that
+brief: Strikes out what people assume, then reveals what is true.
+notes: Replace with what you will say.
+score:
+  steps:
+    - name: strike the assumptions
+      cues:
+        - use: strike
+          on: .wrong
+          stagger: 240
+    - name: what is true
+      cues:
+        - use: appear
+          on: truth
+---
+<Header>Not what you assumed, but <em>this</em></Header>
+<Diagram viewBox="0 0 1600 560" alt="Three assumptions crossed out, and the true answer beside them">
+  <Card x="0" y="0" w="760" h="540" tone="danger" label="What we assume" />
+  <g class="wrong"><text class="st" x="72" y="170">First assumption</text><Strike class="strike" x1="60" x2="420" y="162" /><Badge class="badge" x="470" y="162" /></g>
+  <g class="wrong"><text class="st" x="72" y="300">Second assumption</text><Strike class="strike" x1="60" x2="440" y="292" /><Badge class="badge" x="490" y="292" /></g>
+  <g class="wrong"><text class="st" x="72" y="430">Third assumption</text><Strike class="strike" x1="60" x2="420" y="422" /><Badge class="badge" x="470" y="422" /></g>
+  <Card id="truth" x="840" y="0" w="760" h="540" tone="accent" label="What is true"><text class="big" x="900" y="290">The real answer</text></Card>
+</Diagram>

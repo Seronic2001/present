@@ -10,3 +10,7 @@ tests/.tmp/
 proof/
 tests/.*
 .claude/settings.local.json
+release/
+
+# A talk by someone else, built locally from the private reference. Never publish.
+examples/enterprise-rl/

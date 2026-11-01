@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Present</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{display:grid;grid-template-columns:280px 1fr;font:13px/1.45 "Segoe UI",system-ui,sans-serif;color:#ececee;background:#161618;-webkit-font-smoothing:antialiased;user-select:none;cursor:default}
+.side{display:flex;flex-direction:column;gap:6px;padding:44px 24px 24px;background:#1c1c1f;border-right:1px solid #2e2e33;-webkit-app-region:drag}
+.mark{display:grid;place-items:center;width:32px;height:32px;margin-bottom:12px;border-radius:7px;background:#ececee;color:#1c1c1f;font-size:18px;font-weight:700}
+h1{margin:0;font-size:20px;font-weight:600}
+.lead{margin:0 0 20px;color:#a1a1a9}
+a{cursor:default;-webkit-app-region:no-drag}
+a.btn{display:flex;align-items:center;justify-content:center;height:32px;font-weight:500;color:#ececee;text-decoration:none;border-radius:6px;background:#2c2c31;transition:background .1s}
+a.btn:hover{background:#35353b}a.primary{color:#fff;background:#5b6cf0}a.primary:hover{background:#6f7ef5}
+a:focus-visible{outline:2px solid #6f7ef5;outline-offset:2px}
+.main{min-width:0;padding:44px 16px 16px;overflow:auto}
+h2{margin:0 0 6px;padding:0 10px;font-size:11.5px;font-weight:600;color:#a1a1a9}
+.deck{display:block;padding:6px 10px;color:inherit;text-decoration:none;border-radius:5px}
+.deck:hover{background:#26262a}
+.deck b{display:block;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.deck small{display:block;color:#707078;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.none{padding:8px 10px;color:#707078}
+</style></head>
+<body>
+  <div class="side">
+    <div class="mark" aria-hidden="true">P</div>
+    <h1>Present</h1>
+    <p class="lead">Animated slides you build with an agent.</p>
+    <a class="btn primary" href="present-app://new">New deck</a>
+    <a class="btn" href="present-app://open">Open deck folder</a>
+  </div>
+  <div class="main"><h2>Recent</h2><div id="list"></div></div>
+<script>
+const list = JSON.parse(new URLSearchParams(location.search).get('recent') || '[]');
+const box = document.getElementById('list');
+if (!list.length) { const p = document.createElement('div'); p.className = 'none'; p.textContent = 'Your decks will appear here.'; box.append(p); }
+for (const d of list) {
+  const a = document.createElement('a'), b = document.createElement('b'), s = document.createElement('small');
+  a.className = 'deck'; a.href = 'present-app://recent/' + encodeURIComponent(d);
+  b.textContent = d.split(/[\\/]/).filter(Boolean).pop(); s.textContent = d;
+  a.append(b, s); box.append(a);
+}
+</script>
+</body></html>

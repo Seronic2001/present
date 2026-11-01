@@ -10,7 +10,7 @@ export interface Shot { body: HTMLElement; dim: Element[]; title: Element[]; s: 
 
 export function frame(body: HTMLElement, part: Element, stageScale: number): Shot {
   const b = body.getBoundingClientRect(), r = part.getBoundingClientRect();
-  const stage = body.closest('.p-stage')!.getBoundingClientRect();
+  const stage = body.closest('.p-stage, .ui-ov-inner')!.getBoundingClientRect();
   const x = (r.left - b.left) / stageScale, y = (r.top - b.top) / stageScale;
   const w = r.width / stageScale, h = r.height / stageScale;
   const s = Math.min(FILL_W * W / w, FILL_H * H / h, MAX);
