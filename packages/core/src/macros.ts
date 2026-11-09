@@ -69,6 +69,30 @@ function proseIn(tex: string) {
   return [...new Set((bare.match(/[A-Za-z]{2,}/g) ?? []).filter(w => w.length >= 4 || PROSE.has(w.toLowerCase())))];
 }
 
+/** "H: height of the tree; b: bits guessed" as pairs. A meaning is one short sentence, so ; ends it. */
+export function definitions(s?: string) {
+  return (s ?? '').split(';').map(p => p.trim()).filter(Boolean).map(p => {
+    const i = p.indexOf(':');
+    return i < 0 ? { sym: p, def: '' } : { sym: p.slice(0, i).trim(), def: p.slice(i + 1).trim() };
+  });
+}
+const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Marks only the first place each defined symbol appears: it is explained once, where it is first read. */
+function markTerms(tex: string, a: A, c: MacroCtx) {
+  const defs = definitions(unescape(a.define ?? '')), found: { sym: string; def: string }[] = [];
+  for (const { sym, def } of defs) {
+    const bad = (message: string, fix: string) => c.diags.push({ code: 'bad-define', severity: 'error', slide: c.slide, id: a.id, message, fix });
+    if (!sym || !def) { bad(`define "${sym}" has no meaning`, 'Write define="H: what H means; b: what b means"'); continue; }
+    // Not inside a command name (b in \beta) and not the start of a longer word.
+    const re = new RegExp(`(?<![\\\\A-Za-z])${reEsc(sym)}(?![A-Za-z])`);
+    if (!re.test(tex)) { bad(`define names "${sym}", which is not in the formula`, 'Name a symbol exactly as the LaTeX writes it, like x_i or \\theta'); continue; }
+    tex = tex.replace(re, `{\\htmlData{term=${found.length}}{${sym}}}`);
+    found.push({ sym, def });
+  }
+  return { tex, found };
+}
+const trustTerms = (ctx: { command: string }) => ctx.command === '\\htmlData';
+
 /** Typeset at build time, so a deck needs no maths library when it plays. */
 function formula(a: A, c: MacroCtx) {
   const tex = unescape((a.tex ?? c.text ?? '').trim());
@@ -76,7 +100,14 @@ function formula(a: A, c: MacroCtx) {
   if (!tex) return { tex, html: fail('Math has no formula') };
   const words = proseIn(tex);
   if (words.length) c.diags.push({ code: 'math-word', severity: 'warning', slide: c.slide, id: a.id, message: `"${words.join(', ')}" in a formula is set as italic letters`, fix: 'Put words in \\text{...}' });
-  try { return { tex, html: katex.renderToString(tex, { displayMode: a.display != null && a.display !== 'false', output: 'html', throwOnError: true, strict: 'ignore' }) }; }
+  const marked = markTerms(tex, a, c);
+  try {
+    let html = katex.renderToString(marked.tex, { displayMode: a.display != null && a.display !== 'false', output: 'html', throwOnError: true, strict: 'ignore', trust: marked.found.length ? trustTerms : false });
+    html = html.replace(/data-term="(\d+)"/g, (_, i) => { const t = marked.found[+i]; return `data-term="${attrText(t.sym)}" data-def="${attrText(t.def)}"`; });
+    // The glyphs are hidden from screen readers, so the label carries the meanings.
+    const label = marked.found.length ? `${tex}, where ${marked.found.map(t => `${t.sym} is ${t.def}`).join('; ')}` : tex;
+    return { tex, html, label };
+  }
   catch (e: any) { return { tex, html: fail(`Cannot typeset "${tex.slice(0, 40)}": ${String(e.message).split('\n')[0]}`) }; }
 }
 const mathStyle = (a: A) => (a.size ? `font-size:${num(a, 'size')}px;` : '') + toneVar(a.tone);
@@ -231,18 +262,27 @@ export const MACROS: Record<string, MacroDef> = {
     },
   },
   Math: {
-    doc: 'A formula in LaTeX, typeset when the deck is built, with its fonts inside the deck so it looks the same on every machine. Use it in any text: a Header, Text, Card or TextBlock. In a Diagram it stands alone: x is where it starts (anchor moves that), and y is its vertical middle. Put the LaTeX between the tags, or in tex. Write \\lt for <. display centres it on its own line at 40px. Elsewhere it takes the size of the text around it, or 26px on its own in a layout. size sets it in px.',
-    props: 'id?, class?, style?, tex?, display?, size?, tone?; in a Diagram: x, y, anchor?, w?, h?',
+    doc: 'A formula in LaTeX, typeset when the deck is built, with its fonts inside the deck so it looks the same on every machine. Use it in any text: a Header, Text, Card or TextBlock. In a Diagram it stands alone: x is where it starts (anchor moves that), and y is its vertical middle. Put the LaTeX between the tags, or in tex. Write \\lt for <. display centres it on its own line at 40px. Elsewhere it takes the size of the text around it, or 26px on its own in a layout. size sets it in px. define explains symbols when the presenter points at them: define="H: height of the tree; b: bits the attacker guessed". Write each symbol as the LaTeX does (x_i, \\theta); only its first appearance is marked. Define only what the room cannot work out, a few per slide.',
+    props: 'id?, class?, style?, tex?, display?, size?, tone?, define?; in a Diagram: x, y, anchor?, w?, h?',
     example: '<Text>The cost is <Math>O(n \\log n)</Math> per round.</Text>',
     html: (a, c) => {
       // Always a span: a div would break out of the <p> of a Text, and of any heading.
-      const { tex, html } = formula(a, c), display = a.display != null && a.display !== 'false';
-      return `<span${pass(withStyle(a, mathStyle(a)), display ? 'p-math p-math-display' : 'p-math')} role="img" aria-label="${attrText(tex)}">${html}</span>`;
+      const { tex, html, label } = formula(a, c), display = a.display != null && a.display !== 'false';
+      return `<span${pass(withStyle(a, mathStyle(a)), display ? 'p-math p-math-display' : 'p-math')} role="img" aria-label="${attrText(label ?? tex)}">${html}</span>`;
     },
     svg: (a, c) => {
-      const { tex, html } = formula(a, c), size = num(a, 'size', 28), w = num(a, 'w', 1200), h = num(a, 'h', size * 3), x = num(a, 'x');
+      const { tex, html, label } = formula(a, c), size = num(a, 'size', 28), w = num(a, 'w', 1200), h = num(a, 'h', size * 3), x = num(a, 'x');
       const left = a.anchor === 'middle' ? x - w / 2 : a.anchor === 'end' ? x - w : x, justify = a.anchor === 'middle' ? 'center' : a.anchor === 'end' ? 'flex-end' : 'flex-start';
-      return `<foreignObject${pass(a)} x="${left}" y="${num(a, 'y') - h / 2}" width="${w}" height="${h}"><div class="p-math-line" style="justify-content:${justify};${mathStyle({ ...a, size: String(size) })}"><span class="p-math" role="img" aria-label="${attrText(tex)}">${html}</span></div></foreignObject>`;
+      return `<foreignObject${pass(a)} x="${left}" y="${num(a, 'y') - h / 2}" width="${w}" height="${h}"><div class="p-math-line" style="justify-content:${justify};${mathStyle({ ...a, size: String(size) })}"><span class="p-math" role="img" aria-label="${attrText(label ?? tex)}">${html}</span></div></foreignObject>`;
+    },
+  },
+  Term: {
+    doc: 'A word or symbol the room may not know, explained in a small card when the presenter points at it. Nothing shows until then, so the slide must read without it. Mark a thing once, where it is first used, and only what the audience cannot work out: a few per slide at most. def is one short sentence. For symbols inside a formula, use define on the Math instead.',
+    props: 'def, id?, class?',
+    example: '<Text>Each proof is a path to the <Term def="The one hash at the top of the tree that every leaf rolls up to.">Merkle root</Term>.</Text>',
+    html: (a, c) => {
+      if (!a.def) c.diags.push({ code: 'bad-define', severity: 'error', slide: c.slide, id: a.id, message: 'Term has no def', fix: 'Say what it means in one short sentence' });
+      return `<span${pass(a, 'p-term')} data-def="${attrText(unescape(a.def ?? ''))}"><slot/></span>`;
     },
   },
   TextBlock: {

@@ -84,7 +84,7 @@ async function openDeck(dir) {
   const known = decks.get(dir);
   if (known) { known.win.show(); known.win.focus(); return; }
   if (!existsSync(join(dir, 'deck.yaml'))) { fail('Not a Present deck', `${dir} has no deck.yaml.`); return; }
-  const win = new BrowserWindow({ width: 1500, height: 940, minWidth: 1040, minHeight: 640, backgroundColor: BG, title: basename(dir), show: false, titleBarStyle: 'hidden', titleBarOverlay: BAR, webPreferences: { preload: join(here, 'preload.cjs') } });
+  const win = new BrowserWindow({ width: 1500, height: 940, minWidth: 640, minHeight: 480, backgroundColor: BG, title: basename(dir), show: false, titleBarStyle: 'hidden', titleBarOverlay: BAR, webPreferences: { preload: join(here, 'preload.cjs') } });
   win.once('ready-to-show', () => win.show());
   const entry = { win, server: null, url: null, show: null };
   decks.set(dir, entry);

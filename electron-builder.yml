@@ -1,4 +1,4 @@
-appId: dev.present.studio
+﻿appId: dev.present.studio
 productName: Present
 copyright: Present
 asar: false            # the server reads and compiles its own sources at run time
@@ -15,6 +15,11 @@ afterPack: scripts/desktop-after-pack.cjs
 win:
   target: nsis
   icon: packages/desktop/build/icon.png
+linux:
+  target: AppImage
+  category: Office
+  icon: packages/desktop/build/icon.png
+  artifactName: Present-${version}.AppImage
 nsis:
   oneClick: true
   perMachine: false

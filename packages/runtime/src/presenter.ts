@@ -4,6 +4,7 @@
 import { slideLabels, type CompiledDeck, type CompiledSlide } from '../../core/src/compiled.ts';
 import { applyShot, frame, W, type Shot } from './camera.ts';
 import { Engine } from './engine.ts';
+import { termCards, termIndex } from './terms.ts';
 
 export const COMMANDS = ['next', 'prev', 'replay', 'black', 'toggleMode', 'end', 'down', 'up', 'dive', 'surface'] as const;
 export type Command = typeof COMMANDS[number];
@@ -151,6 +152,12 @@ export function presenterView(first: CompiledDeck, host: HTMLElement) {
     else $('u-next').innerHTML = '<p class="end">End of the deck</p>';
   };
   new ResizeObserver(paint).observe($('u-now'));
+  // Meanings on the live slide, so the presenter can read one before the room asks.
+  const terms = termCards(el, {
+    allowed: t => !!t.closest('#u-now'),
+    // The room sees the same card: the deck finds the term by its place on the slide, the same in both copies.
+    onChange: t => main?.postMessage({ present: 'term', slide: last?.id, i: t ? termIndex($('u-now'), t) : -1 }, '*'),
+  });
 
   addEventListener('message', e => {
     const page = $('u-now').querySelector('iframe')?.contentWindow;
@@ -162,7 +169,7 @@ export function presenterView(first: CompiledDeck, host: HTMLElement) {
     if (e.source !== main) return;
     if (e.data?.present === 'embed') page?.postMessage({ ...e.data, present: 'click' }, '*');
     if (e.data?.present === 'deck') { deck = e.data.deck; paint(); }
-    if (e.data?.present === 'state') { last = e.data; paint(); }
+    if (e.data?.present === 'state') { last = e.data; paint(); terms.check(); }
   });
   el.addEventListener('click', e => {
     const acted = (e.target as HTMLElement).closest('#u-now [data-act]');

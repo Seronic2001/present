@@ -63,6 +63,30 @@ describe('ending a show in a browser', () => {
   }, 30000);
 });
 
+describe('meanings shown from the presenter view', () => {
+  const dir = deck({ a: slide(String.raw`<Center><Text>Paths to the <Term def="The hash at the top.">root</Term>, odds <Math define="b: bits guessed">2^{-b}</Math></Text></Center>`) });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  it('shows the room the meaning the presenter points at, and closes it after', async () => {
+    const file = join(dir, 'show.html');
+    await exportHtml(dir, file);
+    const b = await chromium.launch({ headless: true, channel: 'chrome' }).catch(() => chromium.launch({ headless: true, channel: 'msedge' }));
+    const ctx = await b.newContext({ viewport: { width: 1280, height: 720 } });
+    const p = await ctx.newPage();
+    await p.goto(pathToFileURL(file).href);
+    await p.waitForFunction(() => !!(window as any).__present);
+    const [notes] = await Promise.all([ctx.waitForEvent('page'), p.keyboard.press('p')]);
+    await notes.locator('#u-now [data-term="b"]').waitFor();
+    await notes.waitForTimeout(600);
+    await notes.locator('#u-now [data-term="b"]').hover();
+    await expect.poll(() => p.locator('.ui-term.open').textContent()).toContain('bits guessed');   // the second term, found by its place
+    await notes.locator('#u-now .p-term').hover();
+    await expect.poll(() => p.locator('.ui-term.open').textContent()).toContain('The hash at the top.');
+    await notes.mouse.move(2, 700);
+    await expect.poll(() => p.locator('.ui-term.open').count()).toBe(0);
+    await b.close();
+  }, 40000);
+});
+
 describe('working a live slide from the presenter view', () => {
   const page = '<!doctype html><button id="roll" onclick="out.textContent=Math.floor(Math.random()*1e6)+\'-\'+crypto.getRandomValues(new Uint32Array(1))[0]">Roll</button><p id="out">start ' + "<script>first.textContent=Math.random()</script>".replace('first.textContent', 'document.title') + '</p>';
   const dir = deck({ a: slide('<Diagram viewBox="0 0 1600 500" alt="d"><Box id="b" x="100" y="100" w="400" h="200" title="Go live" goto="live"/></Diagram>'), live: slide('<Embed id="e" src="w.html" alt="Roll" h="400" />') });
@@ -314,6 +338,29 @@ describe('compile', () => {
   });
   it('reports LaTeX it cannot typeset', () => {
     expect(codes(compile(String.raw`<Text><Math>\frac{a</Math></Text>`).diagnostics)).toContain('bad-math');
+  });
+  it('marks the first use of each defined symbol, and says what it means', () => {
+    const { slide: s, diagnostics } = compile(String.raw`<Text><Math define="b: bits the attacker guessed; \theta: the threshold">2^{-b} \lt \theta \cdot b</Math></Text>`);
+    expect(diagnostics).toEqual([]);
+    expect(s.html.match(/data-def=/g)?.length).toBe(2);           // b twice in the formula, marked once
+    expect(s.html).toContain('data-term="b" data-def="bits the attacker guessed"');
+    expect(s.html).toContain('data-term="\\theta"');
+    expect(s.html).toContain('where b is bits the attacker guessed; \\theta is the threshold');
+    expect(s.html).not.toContain('#cc0000');                      // typeset, not shown as an untrusted command
+  });
+  it('defines words with Term', () => {
+    const { slide: s, diagnostics } = compile('<Text>A path to the <Term def="The one hash at the top &amp; centre.">Merkle root</Term>.</Text>');
+    expect(diagnostics).toEqual([]);
+    expect(s.html).toMatch(/<span class="p-term" data-def="The one hash at the top &amp; centre.">Merkle root<\/span>/);
+  });
+  it('keeps definitions deliberate', () => {
+    expect(codes(compile(String.raw`<Text><Math define="z: absent">x</Math></Text>`).diagnostics)).toContain('bad-define');
+    expect(codes(compile(String.raw`<Text><Math define="x">x</Math></Text>`).diagnostics)).toContain('bad-define');
+    expect(codes(compile(String.raw`<Text><Math define="b: one">\beta</Math></Text>`).diagnostics)).toContain('bad-define');  // b is not in \beta
+    expect(codes(compile('<Text><Term>x</Term></Text>').diagnostics)).toContain('bad-define');
+    expect(codes(compile('<Text><Term def="a">x</Term> <Term def="b">x</Term></Text>').diagnostics)).toContain('term-repeated');
+    expect(codes(compile(String.raw`<Text><Math define="a: 1; b: 2; c: 3; d: 4">a+b+c+d</Math></Text>`).diagnostics)).toContain('too-many-terms');
+    expect(codes(compile(`<Text><Term def="${'long '.repeat(40)}">x</Term></Text>`).diagnostics)).toContain('term-long');
   });
   it('keeps a formula in a header whole, and rising with the words', () => {
     const { html, phases } = compile(String.raw`<Header>Bound <Math>x^2</Math></Header>`).slide;

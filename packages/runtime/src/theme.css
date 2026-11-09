@@ -46,6 +46,11 @@ em.ink{color:var(--ink);} em.ok{color:var(--ok);} em.danger{color:var(--danger);
 .p-eyebrow{display:inline-flex;align-items:center;gap:.55em;font-family:var(--font-mono);font-size:15px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);background:var(--paper);border:1px solid var(--accent);padding:.4em .95em;border-radius:999px;}
 .math{font-family:var(--font-math);}
 .p-math{color:var(--tone,inherit);}
+/* A defined term: a faint dotted rule, so the slide still reads clean, and it firms up when pointed at. */
+[data-def]{cursor:help;text-decoration:underline dotted color-mix(in srgb,currentColor 40%,transparent);text-decoration-thickness:max(1px,.06em);text-underline-offset:.2em;transition:text-decoration-color .12s;}
+[data-def]:hover{text-decoration-color:currentColor;}
+.katex [data-def]{text-decoration:none;background:linear-gradient(90deg,color-mix(in srgb,currentColor 40%,transparent) 50%,transparent 0) bottom/4px 1.5px repeat-x;padding-bottom:.08em;}
+.katex [data-def]:hover{background-image:linear-gradient(90deg,currentColor 50%,transparent 0);}
 :where(.p-body,.p-stack,.p-row,.p-center,.p-columns,.p-grid,.p-card)>.p-math{font-size:26px;}
 .p-math-display{display:block;font-size:40px;}
 .p-math .katex{font-size:1em;line-height:1.2;}
@@ -112,6 +117,21 @@ html.spot-on,html.spot-on *{cursor:zoom-out!important;}
 
 /* presenter UI, prefixed ui-, never part of a slide */
 .ui{font:14px/20px var(--font-sans);color:var(--ink);}
+/* A defined term's meaning, on a translucent material: the slide shows through as colour and shape, never as text that
+   competes with the card's own. Mostly opaque, softly blurred, as system menus are. */
+.ui-term{position:fixed;left:0;top:0;z-index:60;max-width:min(380px,calc(100vw - 24px));padding:11px 15px 13px;font-size:clamp(14px,1.05vw,20px);line-height:1.42;color:var(--ink);
+  border-radius:14px;background:color-mix(in srgb,var(--paper) 84%,transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);
+  border:1px solid color-mix(in srgb,#fff 55%,transparent);
+  box-shadow:0 0 0 .5px color-mix(in srgb,var(--ink) 14%,transparent),inset 0 1px 0 color-mix(in srgb,#fff 70%,transparent),0 2px 6px -2px color-mix(in srgb,var(--ink) 16%,transparent),0 14px 36px -10px color-mix(in srgb,var(--ink) 30%,transparent);
+  pointer-events:none;opacity:0;visibility:hidden;translate:0 5px;scale:.97;transform-origin:50% 100%;
+  transition:opacity .14s,translate .16s var(--ease-out,cubic-bezier(.2,.7,.3,1)),scale .16s var(--ease-out,cubic-bezier(.2,.7,.3,1)),visibility 0s .16s;}
+.ui-term[data-side=below]{translate:0 -5px;transform-origin:50% 0;}
+.ui-term.open{opacity:1;visibility:visible;translate:0 0;scale:1;transition:opacity .14s,translate .16s var(--ease-out,cubic-bezier(.2,.7,.3,1)),scale .16s var(--ease-out,cubic-bezier(.2,.7,.3,1));}
+.ui-term-name{margin-bottom:4px;font-weight:600;font-size:1.08em;letter-spacing:-.005em;color:var(--ink);}
+.ui-term-name .katex{font-size:1.25em;}
+.ui-term p{margin:0;color:color-mix(in srgb,var(--ink) 80%,transparent);}
+/* Without the blur, glass would only be faint: keep it solid enough to read. */
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.ui-term{background:color-mix(in srgb,var(--paper) 94%,transparent);}}
 .ui button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;}
 .ui button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 .ui-bar{position:fixed;left:50%;bottom:18px;z-index:50;display:flex;align-items:center;gap:4px;padding:4px;border-radius:12px;background:var(--paper);border:1px solid var(--rule);box-shadow:var(--shadow-float);opacity:0;transform:translate(-50%,10px);pointer-events:none;transition:opacity .3s var(--ease),transform .3s var(--ease);}
@@ -175,3 +195,22 @@ html.spot-on,html.spot-on *{cursor:zoom-out!important;}
 .ui-presenter #u-deep{font-size:13px;color:#a1a1a9;}
 .ui-presenter #u-dive,.ui-presenter #u-up{border-color:#5b6cf0;}
 .ui-presenter [hidden]{display:none!important;}
+/* A presenter window beside the deck is often half a screen or less. It stacks: the live slide on top, then the next one
+   beside the notes, and the buttons wrap rather than run off. */
+.ui-presenter footer{flex-wrap:wrap;}
+.ui-presenter footer button,.ui-presenter header button{white-space:nowrap;}
+@media (max-width:900px){
+  .ui-presenter{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr) auto;gap:12px;padding:12px 14px;}
+  .ui-presenter>header,.ui-presenter>footer{grid-column:1/-1;}
+  .ui-presenter>header{flex-wrap:wrap;gap:8px 12px;}
+  .ui-presenter #u-slide{flex-basis:100%;font-size:14px;}
+  .ui-presenter #u-time{font-size:18px;}
+  .ui-presenter #u-clock{font-size:14px;}
+  .ui-presenter>.side{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);grid-template-rows:auto auto minmax(0,1fr);gap:6px 14px;align-content:start;}
+  .ui-presenter>.side>#u-trail,.ui-presenter>.side>#u-deep{grid-column:1/-1;}
+  .ui-presenter>.side>div:has(#u-next){grid-column:1;grid-row:2/4;}
+  .ui-presenter>.side>.notes-wrap{grid-column:2;grid-row:2/4;min-height:0;}
+  .ui-presenter #u-notes{font-size:clamp(15px,2.6vw,20px);}
+  .ui-presenter>footer{gap:6px;}
+  .ui-presenter>footer button{padding:4px 10px;font-size:13px;}
+}

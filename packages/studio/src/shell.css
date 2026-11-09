@@ -26,7 +26,22 @@ svg { display: block; fill: currentColor; flex: none; }
 ::-webkit-scrollbar-thumb { background: var(--line-strong); border: 3px solid transparent; background-clip: content-box; border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--faint); border: 3px solid transparent; background-clip: content-box; }
 
-.app { display: grid; height: 100%; grid-template: var(--bar) minmax(0, 1fr) var(--status) / 188px minmax(0, 1fr) 264px; }
+.app { --rail: var(--rail-w, 188px); --side: var(--side-w, 340px); display: grid; height: 100%; grid-template: var(--bar) minmax(0, 1fr) var(--status) / var(--rail) minmax(0, 1fr) var(--side); transition: grid-template-columns .18s var(--ease); }
+/* A folded side keeps its column at zero, so the slide grows into the room smoothly and nothing reflows inside it. */
+.app.rail-off { --rail: 0px; }
+.app.panel-off { --side: 0px; }
+.app > nav { grid-column: 1; width: var(--rail-w, 188px); } .app > main { grid-column: 2; } .app > aside { grid-column: 3; width: var(--side-w, 340px); justify-self: end; }
+/* While a side is dragged the columns follow the pointer directly, and the preview does not swallow the drag. */
+.app.resizing { transition: none; cursor: col-resize; }
+.app.resizing iframe { pointer-events: none; }
+.grip { position: fixed; top: var(--bar); bottom: var(--status); z-index: 6; width: 7px; cursor: col-resize; touch-action: none; }
+.grip.rail { left: calc(var(--rail) - 4px); }
+.grip.side { right: calc(var(--side) - 4px); }
+.grip::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background .12s .1s; }
+.grip:hover::after, .resizing .grip::after { background: var(--accent-line); }
+.rail-off > nav, .panel-off > aside { visibility: hidden; transition: visibility 0s .18s; }
+.flip svg { transform: scaleX(-1); }
+.act.working::after { content: ""; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-hi); animation: pulse 1.2s ease-in-out infinite; }
 
 /* ---- Tooltips */
 [data-tip] { position: relative; }
@@ -88,7 +103,7 @@ nav .panelhead { position: sticky; top: 0; z-index: 2; background: var(--panel);
 .thumb.deep .pic { opacity: .86; }
 
 /* ---- Canvas */
-main { position: relative; display: grid; place-items: center; min-width: 0; padding: 28px 28px 116px; container-type: size; background: var(--bg); }
+main { position: relative; display: grid; place-items: center; min-width: 0; padding: clamp(10px, 2.2vmin, 28px); container-type: size; background: var(--bg); }
 .stage { position: relative; width: min(100cqw, calc(100cqh * 16 / 9)); aspect-ratio: 16 / 9; overflow: hidden; border-radius: 2px; background: var(--raised); box-shadow: 0 0 0 1px #0000004d, 0 8px 28px #00000059; }
 iframe { display: block; width: 100%; height: 100%; border: 0; opacity: 0; transition: opacity .2s; }
 iframe.in { opacity: 1; }
@@ -98,33 +113,58 @@ kbd { padding: 0 4px; font: 11px/15px Inter, sans-serif; color: var(--muted); bo
 @keyframes drop { from { opacity: 0; translate: 0 -4px; } }
 @keyframes lift { from { opacity: 0; translate: 0 4px; } }
 
-/* ---- Agent dock */
-.dock { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 5; display: flex; flex-direction: column; gap: 6px; width: min(640px, calc(100cqw + 8px)); max-height: calc(100cqh + 90px); }
-.log, .composer { background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: var(--shadow); }
-.log { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; animation: lift .15s var(--ease); }
-.loghead { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 6px 0 12px; font-size: 11.5px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); }
-.scroll { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow: auto; }
-.me { align-self: flex-end; max-width: 82%; padding: 6px 10px; white-space: pre-wrap; border-radius: 8px; background: var(--raised); }
-.me small { display: block; margin-top: 2px; font-size: 11px; color: var(--muted); }
-.them { max-width: 96%; line-height: 1.55; }
+/* ---- Agent panel. The conversation lives beside the slide, never on it. */
+aside { display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--panel); border-left: 1px solid var(--line); }
+.tabs { flex: none; display: flex; align-items: center; gap: 2px; height: 40px; padding: 0 8px; border-bottom: 1px solid var(--line); }
+.tabs [role=tab] { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; font-size: 12.5px; font-weight: 500; color: var(--faint); border-radius: 5px; transition: color .1s, background .1s; }
+.tabs [role=tab]:hover { color: var(--fg); }
+.tabs [role=tab].on { color: var(--fg); background: var(--raised); }
+.tabs [role=tab] small { font-size: 11px; font-weight: 400; color: var(--faint); font-variant-numeric: tabular-nums; }
+.tabs .ghost { margin-right: -2px; }
+.tabs [data-tip]:hover::after { left: auto; right: 0; transform: none; }
+.pip { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-hi); animation: pulse 1.2s ease-in-out infinite; }
+.pane { flex: 1; min-height: 0; overflow: auto; }
+.pane[hidden] { display: none; }
+.thread { display: flex; flex-direction: column; gap: 14px; padding: 14px 14px 18px; }
+.me { align-self: flex-end; max-width: 88%; padding: 7px 11px; white-space: pre-wrap; border-radius: 12px 12px 4px 12px; background: var(--raised); }
+.thread > .me:not(:first-child) { margin-top: 10px; }   /* a new turn starts a little apart */
+.me small { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; white-space: normal; }
+.me small span { padding: 0 6px; font-size: 11px; line-height: 18px; color: var(--muted); border-radius: 4px; background: var(--hover); }
+.them { line-height: 1.55; color: #d6d6da; }
 .them p, .them ul, .them ol, .them pre { margin: 0 0 8px; }
+.them > :last-child { margin-bottom: 0; }
 .them ul, .them ol { padding-left: 20px; }
 .them pre { padding: 8px 10px; overflow: auto; font: 12px/1.5 "Mona Sans Mono", monospace; border-radius: 6px; background: var(--bg); }
-.them p code, .them li code { padding: 0 4px; font: 12px "Mona Sans Mono", monospace; border-radius: 3px; background: var(--bg); }
-.steps { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
-.steps code { display: flex; align-items: center; gap: 7px; font: 12px Inter, sans-serif; color: var(--muted); }
-.steps code::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--ok); }
-.oops { display: block; margin: 0 0 8px; padding: 6px 10px; color: var(--bad); border-radius: 6px; background: #f2777a14; }
+.them p code, .them li code { padding: 1px 4px; font: 11.5px "Mona Sans Mono", monospace; overflow-wrap: anywhere; border-radius: 4px; background: var(--bg); }
+.work { margin-bottom: 8px; }
+.work summary { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 6px; font-size: 11.5px; color: var(--faint); list-style: none; border-radius: 5px; transition: color .1s, background .1s; }
+.work summary::-webkit-details-marker { display: none; }
+.work summary::before { content: ""; width: 0; height: 0; border-left: 4px solid currentColor; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; transition: rotate .12s; }
+.work[open] summary::before { rotate: 90deg; }
+.work summary:hover { color: var(--fg); background: var(--hover); }
+.work summary em { font-style: normal; color: var(--bad); }
+.work .log { display: flex; flex-direction: column; gap: 3px; margin: 6px 0 2px 9px; padding-left: 11px; border-left: 1px solid var(--line); }
+.steps code { display: flex; align-items: center; gap: 7px; font: 11.5px Inter, sans-serif; color: var(--faint); }
+.steps code::before { content: ""; flex: none; width: 4px; height: 4px; border-radius: 50%; background: var(--line-strong); }
+.said { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.said p, .said ul, .said ol { margin: 2px 0 4px; }
+.doing { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.spin { flex: none; width: 11px; height: 11px; border: 1.5px solid var(--line-strong); border-top-color: var(--muted); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { rotate: 360deg; } }
+.oops { display: block; overflow-wrap: anywhere; margin: 0 0 8px; padding: 6px 10px; color: var(--bad); border-radius: 6px; background: #f2777a14; }
 .busy { display: flex; gap: 4px; padding: 4px 0; }
 .busy i { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: pulse 1s ease-in-out infinite; }
 .busy i:nth-child(2) { animation-delay: .15s; } .busy i:nth-child(3) { animation-delay: .3s; }
 @keyframes pulse { 50% { opacity: .3; } }
+.welcome { margin: auto 0 0; display: flex; flex-direction: column; gap: 4px; }
+.welcome b { font-size: 14px; font-weight: 600; }
+.welcome p { margin: 0 0 10px; color: var(--muted); }
 
-.ideas { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; animation: lift .15s var(--ease); }
-.ideas button { padding: 3px 10px; font-size: 12px; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel); transition: color .1s, background .1s; }
+.ideas { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.ideas button { padding: 4px 10px; text-align: left; font-size: 12px; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel); transition: color .1s, background .1s; }
 .ideas button:hover { color: var(--fg); background: var(--hover); }
 
-.composer { padding: 9px 8px 6px; transition: border-color .12s; }
+.composer { flex: none; margin: 0 10px 10px; padding: 9px 8px 6px; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 10px; transition: border-color .12s; }
 .composer:focus-within { border-color: var(--accent-line); }
 .composer textarea { display: block; width: 100%; padding: 0 4px; border: 0; outline: 0; resize: none; background: none; }
 .composer textarea::placeholder { color: var(--faint); }
@@ -152,9 +192,8 @@ kbd { padding: 0 4px; font: 11px/15px Inter, sans-serif; color: var(--muted); bo
 .menu small { font-size: 11px; color: var(--muted); }
 
 /* ---- Library */
-aside { display: flex; flex-direction: column; overflow: auto; background: var(--panel); border-left: 1px solid var(--line); }
-aside section { padding: 0 12px 14px; border-bottom: 1px solid var(--line); }
-aside section:last-child { flex: 1; border-bottom: 0; }
+.library section { padding: 0 14px 14px; border-bottom: 1px solid var(--line); }
+.library section:last-child { border-bottom: 0; }
 .head { display: flex; align-items: center; gap: 6px; height: 32px; margin: 0; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .head .ghost { margin-left: auto; margin-right: -6px; }
 .tip { margin: 0; font-size: 12px; color: var(--faint); }
@@ -231,8 +270,9 @@ aside section:last-child { flex: 1; border-bottom: 0; }
 .plannote { margin: 0; padding: 0 12px 8px; font-size: 11.5px; color: var(--faint); }
 
 /* ---- Problems */
+.loghead { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 6px 0 12px; font-size: 11.5px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); }
 .thumb em.bad { cursor: pointer; }
-.problems { position: fixed; left: 196px; bottom: 34px; z-index: 12; display: flex; flex-direction: column; width: 460px; max-height: min(420px, 60vh); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); animation: lift .12s var(--ease); }
+.problems { position: fixed; left: calc(var(--rail) + 8px); bottom: 34px; z-index: 12; display: flex; flex-direction: column; width: 460px; max-height: min(420px, 60vh); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); animation: lift .12s var(--ease); }
 .problems ul { flex: 1; min-height: 0; margin: 0; padding: 4px 0; overflow: auto; list-style: none; user-select: text; }
 .problems li { padding: 8px 12px; border-left: 2px solid var(--bad); }
 .problems li.warn { border-left-color: var(--warn); }
@@ -259,8 +299,14 @@ aside section:last-child { flex: 1; border-bottom: 0; }
 .drop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: #161618e6; animation: fade .1s; }
 .drop div { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 32px 64px; font-size: 15px; font-weight: 500; pointer-events: none; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent-soft); }
 .drop div small { font-size: 12px; font-weight: 400; color: var(--muted); }
-.toast { position: fixed; bottom: 36px; right: 276px; z-index: 40; display: flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--raised); box-shadow: var(--shadow); animation: lift .15s var(--ease); }
+.toast { position: fixed; bottom: 36px; right: calc(var(--side) + 12px); z-index: 40; display: flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--raised); box-shadow: var(--shadow); animation: lift .15s var(--ease); }
 .toast .icon { color: var(--ok); }
 
 @media (max-width: 1600px) { .tool span.label { display: none; } .tool { padding: 0 7px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+.brand [data-tip]:hover::after { left: 0; transform: none; animation-name: fade-in; }
+@media (max-width: 1180px) { .act span.label:not(.wide) { display: none; } }
+/* Half a screen or less: every action is its icon, with its name in the tooltip and to screen readers. */
+@media (max-width: 900px) { .act span.label { display: none; } .act.primary { margin-left: 2px; padding: 0 9px; } .act { padding: 0 7px; } }
+/* Narrower still, the bar keeps what has no other way in. Slides still change with the arrow keys and the list. */
+@media (max-width: 880px) { .roomy { display: none !important; } header { gap: 8px; } }

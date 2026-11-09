@@ -42,6 +42,7 @@ The library holds components from every earlier project. It grows by itself, so 
 - One accent colour, for the thing the deck argues for. ok = verified, warn = partial, danger = broken, grey = ambient. Never decoration.
 - When colour is content, like series or vertex colours, use \`data-1\` to \`data-6\`, not raw hex.
 - Formulas use \`<Math>\`. Never build them from tspans or Unicode subscripts.
+- A symbol or word the room cannot work out gets a meaning on hover: \`define\` on a \`<Math>\`, or \`<Term def>\` around words. Define it once, where it first appears, and at most 3 per slide. Never define what the slide already says, and never hide something the argument needs: hover is for the presenter's aside, not the point.
 - Caps labels are a few words, never a sentence.
 - Loops use signal cues only, so every slide comes to rest looking like its drawing.
 - Prefer a Diagram with Box and Link for anything with structure. Coordinates are fine there: render and read the overflow diagnostics.

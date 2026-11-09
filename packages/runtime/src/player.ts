@@ -1,6 +1,7 @@
 // The presenter: one clock, three ways of driving it (autoplay, step, still), plus everything
 // around the slide. All state changes end in engine.seek, so a frame never depends on history.
 import type { CompiledDeck, CompiledSlide } from '../../core/src/compiled.ts';
+import { termCards, termIndex, type TermCards } from './terms.ts';
 import { Engine } from './engine.ts';
 import { applyShot, CAMERA_MS, frame, H, W, type Shot } from './camera.ts';
 import { audit } from './audit.ts';
@@ -39,6 +40,7 @@ export class Player {
   toastEl!: HTMLElement;
   ov!: HTMLElement;
   helpEl!: HTMLElement;
+  terms!: TermCards;
   count!: HTMLElement;
   digits = '';
   digitT = 0;
@@ -68,6 +70,8 @@ export class Player {
     host.appendChild(view);
     this.fit();
     addEventListener('resize', () => this.fit());
+    // Meanings work in every mode, the still preview too: they belong to the slide, not to the show's controls.
+    this.terms = termCards(host, { allowed: el => !!this.section?.contains(el) && !(window as any).__presentStudioActive });
     if (this.mode !== 'still') this.buildUi(host);
     const fromHash = parseInt(location.hash.slice(1), 10);
     const start = this.order.findIndex(s => deck.slides.indexOf(s) + 1 === fromHash);
@@ -100,6 +104,7 @@ export class Player {
   private lastPhase() { return this.order[this.idx].phases.length - 1; }
 
   show(i: number, o: { dir?: number; last?: boolean; quiet?: boolean; instant?: boolean; phase?: number; axis?: 'x' | 'y' } = {}) {
+    this.terms?.hide();
     this.closeSpot(true);
     this.frozen = false;
     this.ovToggle(false);
@@ -396,6 +401,11 @@ export class Player {
         this.tick(performance.now());
       }
       if (e.data?.present === 'act' && e.source === this.popup) this.act(String(e.data.id));
+      // The presenter points at a term in their view, and the room sees what it means.
+      if (e.data?.present === 'term' && e.source === this.popup) {
+        const term = e.data.slide === this.order[this.idx].id && e.data.i >= 0 ? this.section.querySelectorAll('[data-def]')[e.data.i] : null;
+        if (term) this.terms.show(term); else this.terms.hide();
+      }
       if (e.data?.present === 'goto' && e.source === this.popup) this.jump(String(e.data.id));
       if (e.data?.present === 'cmd' && e.source === this.popup && COMMANDS.includes(e.data.cmd)) this[e.data.cmd as Command]();
       if (e.data?.present === 'hello' || (e.data?.present === 'ping' && e.source !== this.popup)) {

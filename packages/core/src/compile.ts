@@ -121,6 +121,19 @@ export function compileSlide(src: string, o: CompileOpts): { slide: CompiledSlid
   const words = textOf(root).trim().split(/\s+/).filter(Boolean).length;
   if (words > 160) add('too-many-words', 'warning', `Slide has ${words} words`, 'Cut text or split the slide');
 
+  // Definitions are for the few things a room cannot work out. A slide full of them is a glossary, not a slide.
+  const terms = new Map<string, number>();
+  walk(root, e => {
+    const def = e.attribs?.['data-def'];
+    if (def == null) return;
+    const name = e.attribs?.['data-term'] ?? textOf(e).trim();
+    terms.set(name, (terms.get(name) ?? 0) + 1);
+    if (def.length > 160) add('term-long', 'warning', `The meaning of "${name}" is ${def.length} characters`, 'Keep it to one short sentence. A longer idea belongs on the slide');
+  });
+  const twice = [...terms].filter(([, n]) => n > 1).map(([k]) => k);
+  if (twice.length) add('term-repeated', 'warning', `${twice.map(k => `"${k}"`).join(', ')} defined more than once`, 'Define a thing once, where it is first used');
+  if (terms.size > 3) add('too-many-terms', 'warning', `Slide defines ${terms.size} terms`, 'Keep the 3 the audience most needs. Underline everywhere reads as noise');
+
   const { phases, spots, actions } = compileScore({ root, score: p.front.score, slide, diags, stepLimit: o.stepLimit ?? 10000, phrases: { ...o.phrases, ...p.front.score?.phrases } });
   const restRaw = p.front.score?.rest;
   const clicked = new Set<string>();

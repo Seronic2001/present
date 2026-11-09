@@ -221,7 +221,7 @@ describe.skipIf(!existsSync(exe))('desktop app', () => {
       it('keeps the top bar in order at every width, with a long title', async () => {
         const size = (w: number, h: number) => app.evaluate(({ BrowserWindow }, s) => { BrowserWindow.getAllWindows().find(x => x.webContents.getURL().endsWith('/studio'))!.setSize(s[0], s[1]); }, [w, h]);
         await page.evaluate(() => { document.querySelector('.title')!.textContent = 'Zero-Knowledge Proofs for Graph Isomorphism and 3-Colouring'; });
-        for (const w of [1040, 1500, 1913]) {
+        for (const w of [640, 800, 1040, 1500, 1913]) {
           await size(w, 800);
           await page.waitForTimeout(400);
           if (process.env.PRESENT_SHOT) await page.screenshot({ path: `${process.env.PRESENT_SHOT}-top-${w}.png`, clip: { x: 0, y: 0, width: await page.evaluate(() => innerWidth), height: 60 } });
@@ -230,7 +230,7 @@ describe.skipIf(!existsSync(exe))('desktop app', () => {
             return {
               gaps: parts.slice(1).map((r, n) => r.left - parts[n].right),
               end: parts.at(-1)!.right, limit: (navigator as any).windowControlsOverlay?.getTitlebarAreaRect?.().right || innerWidth,
-              squares: [...document.querySelectorAll('.act.square')].map(e => e.getBoundingClientRect().width),
+              squares: [...document.querySelectorAll('.act.square')].filter(e => getComputedStyle(e).display !== 'none').map(e => e.getBoundingClientRect().width),
               title: document.querySelector('.title')!.getBoundingClientRect().width,
             };
           });

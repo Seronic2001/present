@@ -170,6 +170,15 @@ let s = ''; process.stdin.on('data', d => s += d).on('end', () => {
     await page.locator('nav .thumb').first().click();
     expect(edit('04-a-frame', 'Followed').ok).toBe(true);
     await expect.poll(shown).toBe('04-a-frame');
+    // A change to several slides at once has no one slide to go to, so the view stays and says so.
+    expect(applyOps(t.dir, [{ op: 'setTitle', slide: '02-why-it-fails', title: 'Many A' }, { op: 'setTitle', slide: '05-results', title: 'Many B' }], revisionOf(t.dir)).ok).toBe(true);
+    await expect.poll(() => page.locator('.toast').textContent()).toContain('changed 2 slides');
+    expect(await shown()).toBe('04-a-frame');
+    // A slide saved with nothing changed in it is not an edit.
+    const same = join(t.dir, 'slides', '03-the-loop.slide');
+    writeFileSync(same, readFileSync(same, 'utf8'));
+    await page.waitForTimeout(600);
+    expect(await shown()).toBe('04-a-frame');
     await page.getByRole('button', { name: 'Follow edits' }).click();
     expect(edit('06-close', 'Not followed').ok).toBe(true);
     await page.waitForTimeout(600);

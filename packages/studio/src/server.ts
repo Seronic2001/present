@@ -1,7 +1,7 @@
 // The dev server. It can write to the deck, so it listens on loopback only and refuses any request
 // without the session token or from another origin: otherwise any open web page could post edits.
 import { randomBytes } from 'node:crypto';
-import { watch } from 'node:fs';
+import { readdirSync, readFileSync, watch } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,7 +38,17 @@ data: ${JSON.stringify(data)}
     return deckHtml(deck, root, '', `${tag}<script>${(await clientBundle()).replace(/<\/script/gi, '<\\/script')}</script>`);
   };
 
-  let timer: NodeJS.Timeout | undefined, refsTimer: NodeJS.Timeout | undefined, planTimer: NodeJS.Timeout | undefined, edited: string | undefined;
+  let timer: NodeJS.Timeout | undefined, refsTimer: NodeJS.Timeout | undefined, planTimer: NodeJS.Timeout | undefined;
+  // Every slide changed in one burst, so a change to many is not reported as a change to whichever was saved last.
+  // A slide counts only if its text changed: Windows also reports a file that was touched, or saved unchanged.
+  const edited = new Set<string>(), seen = new Map<string, string>();
+  const read = (rel: string) => { try { return readFileSync(join(root, rel), 'utf8'); } catch { return null; } };
+  try { for (const n of readdirSync(join(root, 'slides'))) if (n.endsWith('.slide')) seen.set(join('slides', n), read(join('slides', n)) ?? ''); } catch {}
+  const changed = (rel: string) => {
+    const key = join(rel), text = read(rel), was = seen.get(key);
+    if (text == null) seen.delete(key); else seen.set(key, text);
+    return text !== was;
+  };
   const watcher = watch(root, { recursive: true }, (_e, f) => {
     if (!f || String(f).startsWith('.present') || String(f).endsWith('.tmp')) return;
     if (String(f) === 'plan.yaml') {
@@ -52,13 +62,15 @@ data: ${JSON.stringify(data)}
       return;
     }
     const full = /^(tracks|macros)[\\/]/.test(String(f));
-    edited = /^slides[\\/](.+)\.slide$/.exec(String(f))?.[1] ?? edited;
+    const slide = /^slides[\\/](.+)\.slide$/.exec(String(f))?.[1];
+    if (slide && !changed(String(f))) return;
+    if (slide) edited.add(slide);
     clearTimeout(timer);
     timer = setTimeout(async () => {
       if (full) await loadProjectMacros(root).catch(() => {});   // a macro an agent just added or changed
       for (const c of clients) c.write(`data: ${full ? 'reload' : 'deck'}\n\n`);
-      if (edited) broadcast('edited', edited);
-      edited = undefined;
+      if (edited.size) broadcast('edited', [...edited]);
+      edited.clear();
     }, 80);
   });
 
