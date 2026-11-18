@@ -53,7 +53,8 @@ describe('rest', () => {
 
 describe('golden images', () => {
   it('matches every step of the example deck', async () => {
-    const dir = resolve('tests/golden'), update = !!process.env.UPDATE_GOLDEN;
+    // Each OS rasterises text its own way, so goldens are per platform. One with none yet records them.
+    const dir = resolve('tests/golden', process.platform), update = !!process.env.UPDATE_GOLDEN;
     mkdirSync(dir, { recursive: true });
     const { deck } = compileDeck(EXAMPLE);
     const failures: string[] = [];
