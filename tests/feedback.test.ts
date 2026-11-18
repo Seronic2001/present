@@ -35,12 +35,16 @@ describe('ending a show in a browser', () => {
   };
   beforeAll(() => exportHtml(dir, file).then(() => undefined), 30000);
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  // The click closes the window it is in, sometimes before Playwright has finished the click.
+  const endShow = (notes: any) => notes.getByRole('button', { name: 'End show' }).click().catch((e: Error) => {
+    if (!/has been closed/.test(e.message)) throw e;
+  });
 
   it('closes the presenter view and says so, though the browser keeps the tab open', async () => {
     const { b, p, notes } = await open();
     await notes.getByRole('button', { name: 'Black screen' }).click();
     await p.locator('.ui-black.open').waitFor({ state: 'attached' });
-    await notes.getByRole('button', { name: 'End show' }).click();
+    await endShow(notes);
     await expect.poll(() => notes.isClosed()).toBe(true);
     await p.locator('.ui-toast.show', { hasText: 'Show ended' }).waitFor();
     expect(await p.locator('.ui-black.open').count()).toBe(0);
@@ -49,13 +53,13 @@ describe('ending a show in a browser', () => {
   it('closes the presenter view when the deck has already gone', async () => {
     const { b, p, notes } = await open();
     await p.close();
-    await notes.getByRole('button', { name: 'End show' }).click();
+    await endShow(notes);
     await expect.poll(() => notes.isClosed()).toBe(true);
     await b.close();
   }, 30000);
   it('can open the presenter view again afterwards', async () => {
     const { b, p, notes } = await open();
-    await notes.getByRole('button', { name: 'End show' }).click();
+    await endShow(notes);
     await expect.poll(() => notes.isClosed()).toBe(true);
     const [again] = await Promise.all([p.context().waitForEvent('page'), p.keyboard.press('p')]);
     await again.locator('#u-now .p-body').waitFor();
