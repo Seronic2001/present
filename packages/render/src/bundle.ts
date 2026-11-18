@@ -42,16 +42,25 @@ export function fontCss(): string {
   ].join('\n');
 }
 
-/** Custom tracks: each tracks/<name>.ts default-exports (el, args, api) => apply(p). */
+/** Custom tracks: each tracks/<name>.ts default-exports (el, args, api) => apply(p). Scenes: each
+ *  scenes/<name>.ts default-exports (ctx) => void. Both are the deck's own code, bundled into the page. */
 export async function tracksBundle(dir: string): Promise<string> {
-  const t = join(resolve(dir), 'tracks');
-  const files = existsSync(t) ? readdirSync(t).filter(f => /\.(ts|js)$/.test(f)) : [];
+  const root = resolve(dir), list = (kind: string) => {
+    const d = join(root, kind);
+    return existsSync(d) ? readdirSync(d).filter(f => /\.(ts|js|mjs)$/.test(f)).map(f => ({ kind, f })) : [];
+  };
+  const files = [...list('tracks'), ...list('scenes')];
   if (!files.length) return '';
-  const entry = files.map((f, i) => `import t${i} from ${JSON.stringify('./' + f)};\nPresent.track(${JSON.stringify(basename(f).replace(/\.\w+$/, ''))}, t${i});`).join('\n');
-  const r = await esbuild.build({
-    stdin: { contents: entry, resolveDir: t, loader: 'ts' }, bundle: true, format: 'iife', minify: true, write: false, logLevel: 'silent',
-  });
-  return r.outputFiles[0].text;
+  const entry = files.map(({ kind, f }, i) => `import t${i} from ${JSON.stringify(`./${kind}/${f}`)};\nPresent.${kind === 'tracks' ? 'track' : 'scene'}(${JSON.stringify(basename(f).replace(/\.\w+$/, ''))}, t${i});`).join('\n');
+  try {
+    const r = await esbuild.build({
+      stdin: { contents: entry, resolveDir: root, loader: 'ts' }, bundle: true, format: 'iife', minify: true, write: false, logLevel: 'silent',
+    });
+    return r.outputFiles[0].text;
+  } catch (e: any) {
+    const why = (e.errors ?? []).map((x: any) => `${x.location?.file ?? ''}:${x.location?.line ?? ''} ${x.text}`).join('; ') || String(e.message);
+    throw new Error(`tracks/ and scenes/ do not build: ${why}`);
+  }
 }
 
 /** Project macros: each macros/<Name>.ts default-exports a macro definition. Trusted code. */

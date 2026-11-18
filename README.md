@@ -107,7 +107,7 @@ score:
 </Diagram>
 ```
 
-Three levels of power: layout macros (`Header`, `Columns`, `Card`, `Stat`), `<Diagram>` for dense drawings with raw SVG allowed, and code in `tracks/*.ts` and `macros/*.ts` for what the Score cannot express. `present mcp`'s `catalog` tool lists everything with examples, and `writingMacros` in it gives the macro file format.
+Three levels of power: layout macros (`Header`, `Columns`, `Card`, `Stat`, `Code`), `<Diagram>` for dense drawings with raw SVG allowed, and code in `scenes/*.ts`, `tracks/*.ts` and `macros/*.ts` for what the Score cannot express. `present mcp`'s `catalog` tool lists everything with examples, and `writingMacros` in it gives the macro file format.
 
 Formulas use `<Math>` with LaTeX, typeset at build time by KaTeX. Its fonts go inside the deck, only when the deck has a formula, so they look the same on every machine. `<TextBlock>` is text that wraps in a Diagram. Attributes like `fill` and `font-family` on SVG `<text>` are moved to inline style so they beat the theme. Colour that is content uses `data-1` to `data-6`, which `theme.yaml` can override. `align: top` in `deck.yaml` pins headers, and a slide can opt out with `align: center`.
 
@@ -115,12 +115,18 @@ Formulas use `<Math>` with LaTeX, typeset at build time by KaTeX. Its fonts go i
 
 A custom track default-exports `(el, args, api) => apply(p)`. `apply` must depend only on `p`, and `p=0` and `p=1` must leave the drawing as it was when used in a loop.
 
+### Scenes
+
+For choreography cues cannot express (a spark riding a stroke as it draws, a dot that stops at a gate, loops at several rates, cause and effect across a whole figure), a slide can be driven by a scene: `scenes/<name>.ts` default-exports `(ctx) => { ... }`, and the slide says `score: { scene: <name> }`. The scene owns the slide's first `<svg>` (or `score.root`). Its body is the intro, each `ctx.step(name, fn)` is a click, and loops started with `ctx.every` or `ctx.frame` run while the presenter talks, then stop after the rest window and `ctx.onRest` settles the drawing. The helpers (`tween`, `reveal`, `pop`, `draw` with a spark, `type`, `count`, `travel`, `ripple`, `hot`, `dot`, `layer`, `along`, `center`, `rand`) are documented with examples under `scenes` in the catalog.
+
+A scene is imperative, so it is made a function of time by replay: it runs on a virtual clock, and going back restores the drawing and runs it again up to that moment. The same replay measures each step, so a score never carries durations. The page measures as it mounts a slide, and `deck_apply` and `deck_check` record the timings in `.present/scenes.json` so the outline and the presenter know them without a browser. `slide_filmstrip` with `loop: true` films what moves after the build.
+
 ## Building with primitives
 
 Four layers, smallest to largest, and an agent gets all of them from the `catalog` tool. They were found by measuring a real 14-slide talk: what it drew and animated again and again.
 
-- **Cues** move one thing. `animate` moves any number in an attribute or style, and `stream` sends many particles along a path.
-- **Phrases** are named runs of cues: `arrive`, `appear`, `strike`, `handoff`, `verdict`, `flood`, `survey`. Add your own under `phrases:` in `deck.yaml`.
+- **Cues** move one thing. `animate` moves any number in an attribute or style, and carries on from where it last stopped, and `stream` sends many particles along a path. Two cues work on a whole structure: `build` brings a Diagram in by its links (boxes nothing points at pop first, then each link draws and a particle lands its target), and `swap` shows one panel of a `<Swap>` in place of another. `type` keeps tspans, so coloured code types in colour, and `count` counts the first number in any text.
+- **Phrases** are named runs of cues: `arrive`, `appear`, `strike`, `handoff`, `verdict`, `flood`, `survey`, `type-code`. Add your own under `phrases:` in `deck.yaml`.
 - **Figures** are drawings: `Milestones`, `Plot`, `Timing`, `Hub`, `Terrain`, `Neck`. Each repeated unit is a `.part` holding `.seg`, `.node` and `.body`, so one phrase moves them all.
 - **Patterns** are whole slides for a job: `statement`, `agenda`, `contrast`, `flow`, `evidence`, `breakdown`, `boundary`, `gates`, `search`. Open `examples/patterns` to see them; `node scripts/gallery.ts` regenerates it.
 
@@ -137,13 +143,13 @@ An agent adds a pattern with `addSlide{id, pattern}`, or reads one with `pattern
 
 ## The library
 
-Components saved across projects, in the spirit of shadcn: adding one copies its source into your deck, so the deck owns it and has no dependency. The library is a plain folder, `~/.present/library` (`PRESENT_LIBRARY` moves it), so you can read it, edit it, or keep it in git. An item can hold a slide, macros, tracks, phrases and styles together.
+Components saved across projects, in the spirit of shadcn: adding one copies its source into your deck, so the deck owns it and has no dependency. The library is a plain folder, `~/.present/library` (`PRESENT_LIBRARY` moves it), so you can read it, edit it, or keep it in git. An item can hold a slide, macros, tracks, scenes, phrases and styles together. `library_search` finds one by what it is for, in plain words.
 
-It fills itself. After each `deck_apply`, the MCP server saves the phrases, macros and tracks the deck defined, and agents are told to save slides worth reusing with `library_save`, without asking. Agents see the library in `catalog` and copy from it with `library_add`.
+It fills itself. After each `deck_apply`, the MCP server saves the phrases, macros, tracks and scenes the deck defined, and agents are told to save slides worth reusing with `library_save`, without asking. Agents see the library in `catalog` and copy from it with `library_add`.
 
 Saving a slide gathers what it depends on. Whole slides are only saved by an agent's choice, because they hold content. Agents are told to save the form and not the facts, but that is an instruction, not a guarantee.
 
-- Macros and tracks are code. Items holding them are marked `code`, with the deck they came from. Read one from a deck you do not recognise before using it.
+- Macros, tracks and scenes are code. Items holding them are marked `code`, with the deck they came from. Read one from a deck you do not recognise before using it.
 - Put `library: false` in `deck.yaml` for a deck whose work must stay private. Do this for client work.
 - Files over 64 KB are not harvested. A replaced item is kept in `.replaced/`.
 
@@ -226,7 +232,7 @@ tests/             npm test; UPDATE_GOLDEN=1 refreshes golden images
 
 ## Security
 
-Slides are data: scripts and event handlers are rejected, links must be http(s), and images must be local. Only `tracks/` and `macros/` run code, so treat a deck that contains them as code. A page in `<Embed>` runs scripts too, but in a sandboxed frame with no access to the deck, the file system or its own origin. The dev server binds to `127.0.0.1` and requires a session token and same origin.
+Slides are data: scripts and event handlers are rejected, links must be http(s), and images must be local. Only `tracks/`, `scenes/` and `macros/` run code, so treat a deck that contains them as code. A page in `<Embed>` runs scripts too, but in a sandboxed frame with no access to the deck, the file system or its own origin. The dev server binds to `127.0.0.1` and requires a session token and same origin.
 
 ## Licences
 

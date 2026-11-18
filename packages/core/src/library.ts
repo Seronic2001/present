@@ -13,13 +13,14 @@ import { CUES } from './score.ts';
 
 export interface LibraryItem {
   name: string; doc: string; useWhen: string;
-  macros: string[]; tracks: string[]; phrases: string[];
+  macros: string[]; tracks: string[]; phrases: string[]; scenes?: string[];
   slide: boolean; css: boolean;
   code: boolean;          // macros and tracks run: treat an item with them as code
   auto: boolean;          // harvested, not chosen by anyone
   from: string; savedAt: string; hash: string;
 }
-export interface SaveRequest { name: string; doc: string; useWhen?: string; slide?: string; macros?: string[]; tracks?: string[]; phrases?: string[]; css?: string; }
+export interface SaveRequest { name: string; doc: string; useWhen?: string; slide?: string; macros?: string[]; tracks?: string[]; scenes?: string[]; phrases?: string[]; css?: string; }
+const CODE_KINDS = ['macros', 'tracks', 'scenes'] as const;
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const MAX_FILE = 64 * 1024;   // past this it is a deck's private engine, not a component
@@ -44,9 +45,10 @@ export function readItem(name: string): LibraryItem {
 }
 
 /** What a piece of slide or phrase text needs from its deck. Built-ins are not dependencies. */
-function needs(root: string, text: string, deckPhrases: Record<string, any>, out = { macros: new Set<string>(), tracks: new Set<string>(), phrases: new Set<string>() }) {
+function needs(root: string, text: string, deckPhrases: Record<string, any>, out = { macros: new Set<string>(), tracks: new Set<string>(), scenes: new Set<string>(), phrases: new Set<string>() }) {
   for (const m of text.matchAll(/<([A-Z]\w*)/g)) if (codeFile(root, 'macros', m[1])) out.macros.add(m[1]);
   for (const m of text.matchAll(/"?track"?:\s*["']?([\w-]+)/g)) if (codeFile(root, 'tracks', m[1])) out.tracks.add(m[1]);
+  for (const m of text.matchAll(/"?scene"?:\s*["']?([\w-]+)/g)) if (codeFile(root, 'scenes', m[1])) out.scenes.add(m[1]);
   for (const m of text.matchAll(/"?use"?:\s*["']?([\w-]+)/g)) {
     if (deckPhrases[m[1]] && !out.phrases.has(m[1])) { out.phrases.add(m[1]); needs(root, JSON.stringify(deckPhrases[m[1]].cues ?? []), deckPhrases, out); }
   }
@@ -61,25 +63,27 @@ export function saveToLibrary(dir: string, r: SaveRequest, auto = false): Librar
   const found = needs(root, slide ?? '', deckPhrases);
   for (const k of r.macros ?? []) found.macros.add(k);
   for (const k of r.tracks ?? []) found.tracks.add(k);
+  for (const k of r.scenes ?? []) found.scenes.add(k);
   for (const k of r.phrases ?? []) { found.phrases.add(k); needs(root, JSON.stringify(deckPhrases[k]?.cues ?? []), deckPhrases, found); }
   for (const k of found.macros) if (!codeFile(root, 'macros', k)) throw new Error(`This deck has no macros/${k}`);
   for (const k of found.tracks) if (!codeFile(root, 'tracks', k)) throw new Error(`This deck has no tracks/${k}`);
+  for (const k of found.scenes) if (!codeFile(root, 'scenes', k)) throw new Error(`This deck has no scenes/${k}`);
   for (const k of found.phrases) if (!deckPhrases[k]) throw new Error(`This deck has no phrase "${k}"${PHRASES[k] ? ': it is built in, and needs no saving' : ''}`);
-  if (!slide && !found.macros.size && !found.tracks.size && !found.phrases.size && !r.css) throw new Error('Nothing to save: give a slide, macros, tracks, phrases or css');
+  if (!slide && !found.macros.size && !found.tracks.size && !found.scenes.size && !found.phrases.size && !r.css) throw new Error('Nothing to save: give a slide, macros, tracks, scenes, phrases or css');
 
   const tmp = `${target}.tmp`;
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   const hash = createHash('sha256');
   const put = (rel: string, text: string) => { const p = join(tmp, rel); mkdirSync(join(p, '..'), { recursive: true }); writeFileSync(p, text); hash.update(rel).update(text); };
-  for (const kind of ['macros', 'tracks'] as const) for (const k of found[kind]) { const f = codeFile(root, kind, k)!; put(`${kind}/${basename(f)}`, readFileSync(f, 'utf8')); }
+  for (const kind of CODE_KINDS) for (const k of found[kind]) { const f = codeFile(root, kind, k)!; put(`${kind}/${basename(f)}`, readFileSync(f, 'utf8')); }
   const phrases = Object.fromEntries([...found.phrases].sort().map(k => [k, deckPhrases[k]]));
   if (found.phrases.size) put('phrases.json', JSON.stringify(phrases, null, 2));
   if (slide) put('slide.slide', slide);
   if (r.css) put('style.css', r.css);
   const item: LibraryItem = {
-    name: r.name, doc: r.doc, useWhen: r.useWhen ?? '', macros: [...found.macros].sort(), tracks: [...found.tracks].sort(), phrases: Object.keys(phrases),
-    slide: !!slide, css: !!r.css, code: found.macros.size + found.tracks.size > 0, auto, from: root, savedAt: new Date().toISOString(), hash: hash.digest('hex').slice(0, 16),
+    name: r.name, doc: r.doc, useWhen: r.useWhen ?? '', macros: [...found.macros].sort(), tracks: [...found.tracks].sort(), scenes: [...found.scenes].sort(), phrases: Object.keys(phrases),
+    slide: !!slide, css: !!r.css, code: found.macros.size + found.tracks.size + found.scenes.size > 0, auto, from: root, savedAt: new Date().toISOString(), hash: hash.digest('hex').slice(0, 16),
   };
   writeFileSync(join(tmp, 'item.json'), JSON.stringify(item, null, 2));
   if (existsSync(target)) {
@@ -113,13 +117,13 @@ export function harvest(dir: string): LibraryItem[] {
   };
   const header = (f: string) => /^\/\/\s*(.+)$/m.exec(readFileSync(f, 'utf8'))?.[1] ?? /doc:\s*['"`]([^'"`]+)/.exec(readFileSync(f, 'utf8'))?.[1];
   for (const [name, p] of Object.entries<any>(meta.phrases ?? {})) if (p?.cues) take(name, p.doc ?? `Motion from ${label}`, { phrases: [name] }, JSON.stringify(p));
-  for (const kind of ['macros', 'tracks'] as const) {
+  for (const kind of CODE_KINDS) {
     const d = join(root, kind);
     for (const f of existsSync(d) ? readdirSync(d).filter(x => /\.(ts|js|mjs)$/.test(x)) : []) {
       const p = join(d, f);
       if (statSync(p).size > MAX_FILE) continue;
       const name = f.replace(/\.\w+$/, '');
-      take(name, header(p) ?? `${kind === 'macros' ? 'Macro' : 'Track'} from ${label}`, { [kind]: [name] }, readFileSync(p, 'utf8'));
+      take(name, header(p) ?? `${{ macros: 'Macro', tracks: 'Track', scenes: 'Scene' }[kind]} from ${label}`, { [kind]: [name] }, readFileSync(p, 'utf8'));
     }
   }
   return saved;
@@ -128,7 +132,7 @@ export function harvest(dir: string): LibraryItem[] {
 /** Copies a component into a deck. Files that differ are refused, so nobody's edits are overwritten. */
 export function addFromLibrary(dir: string, name: string, o: { overwrite?: boolean } = {}) {
   const root = resolve(dir), item = readItem(name), src = itemDir(name);
-  const copies = (['macros', 'tracks'] as const).flatMap(kind => {
+  const copies = CODE_KINDS.flatMap(kind => {
     const d = join(src, kind);
     return existsSync(d) ? readdirSync(d).map(f => ({ from: join(d, f), to: join(root, kind, f), rel: `${kind}/${f}` })) : [];
   });
@@ -159,6 +163,18 @@ export function addFromLibrary(dir: string, name: string, o: { overwrite?: boole
     if (!css.includes(mark)) { writeFileSync(f, `${css}${css ? '\n' : ''}${mark}\n${readFileSync(join(src, 'style.css'), 'utf8')}\n`); added.push('theme.css'); }
   }
   return { added, slide: item.slide ? readFileSync(join(src, 'slide.slide'), 'utf8') : null, code: item.code };
+}
+
+/** Items by what they are for: every word of the query is looked for in the name, doc, useWhen and parts. */
+export function searchLibrary(query: string, limit = 8) {
+  const stem = (w: string) => w.toLowerCase().replace(/(ing|ed|es|s)$/, '');
+  const words = query.split(/[^A-Za-z0-9]+/).filter(w => w.length > 2).map(stem);
+  const scored = listLibrary().map(i => {
+    const name = i.name.split(/(?=[A-Z])|[-_]/).map(stem), text = `${i.doc} ${i.useWhen} ${[...i.macros, ...i.tracks, ...(i.scenes ?? []), ...i.phrases].join(' ')}`.split(/[^A-Za-z0-9]+/).map(stem);
+    const score = words.reduce((n, w) => n + (name.includes(w) ? 3 : 0) + (text.includes(w) ? 1 : 0) + (text.some(t => t.length > 3 && w.length > 3 && (t.startsWith(w) || w.startsWith(t))) ? .5 : 0), 0);
+    return { score, i };
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score || a.i.name.localeCompare(b.i.name));
+  return scored.slice(0, limit).map(({ i, score }) => ({ name: i.name, doc: i.doc, useWhen: i.useWhen, kinds: [i.macros.length && 'macro', i.tracks.length && 'track', i.scenes?.length && 'scene', i.phrases.length && 'phrase', i.slide && 'slide'].filter(Boolean), code: i.code, score: +score.toFixed(1) }));
 }
 
 export function removeFromLibrary(name: string) {

@@ -26,6 +26,7 @@ export class Player {
   t0 = 0;
   mode: Mode;
   frozen = false;           // seek() holds the clock until the next user action
+  forced = false;           // the presenter chose a mode, which then beats each slide's own
   reduced: boolean;
   engine!: Engine;
   section!: HTMLElement;
@@ -93,7 +94,8 @@ export class Player {
     s.id = this.order[i].id;
     if (this.order[i].align) s.dataset.align = this.order[i].align;
     this.seed = this.mode === 'still' ? 1 : Math.floor(Math.random() * 2 ** 31);   // a still is a known picture
-    s.innerHTML = `<div class="p-body">${this.order[i].html.replaceAll('PRESENT_SEED', String(this.seed))}</div>`;
+    const zoom = this.order[i].scale ? ` style="zoom:${this.order[i].scale}"` : '';
+    s.innerHTML = `<div class="p-body"${zoom}>${this.order[i].html.replaceAll('PRESENT_SEED', String(this.seed))}</div>`;
     for (const f of s.querySelectorAll('iframe')) f.addEventListener('load', () => { f.dataset.ready = ''; }, { once: true });
     this.stage.appendChild(s);
     this.section = s;
@@ -102,6 +104,11 @@ export class Player {
     this.engine.acts = this.mode === 'still' ? undefined : {};
   }
   private lastPhase() { return this.order[this.idx].phases.length - 1; }
+  /** The mode this slide plays in: its own, unless the presenter picked one, or the deck's. */
+  private slideMode(): Mode {
+    if (this.mode === 'still' || this.forced) return this.mode;
+    return this.order[this.idx]?.mode ?? this.mode;
+  }
 
   show(i: number, o: { dir?: number; last?: boolean; quiet?: boolean; instant?: boolean; phase?: number; axis?: 'x' | 'y' } = {}) {
     this.terms?.hide();
@@ -159,18 +166,21 @@ export class Player {
     this.lastTick = now;
     this.t = now - this.t0;
     this.engine.seek(this.phase, this.t);
-    const end = this.order[this.idx].phases[this.phase].end;
-    if (this.mode === 'auto' && this.phase < this.lastPhase() && this.t >= Math.min(end + this.deck.dwell, AUTO_MAX + this.deck.dwell)) {
+    const ph = this.order[this.idx].phases[this.phase], mode = this.slideMode();
+    // A step can go on by itself even in step mode: auto is how long it waits after its build.
+    const goesOn = this.phase < this.lastPhase() && (mode === 'auto' || ph.auto != null);
+    const wait = ph.auto ?? this.deck.dwell, cap = ph.auto != null ? Infinity : AUTO_MAX + this.deck.dwell;
+    if (goesOn && this.t >= Math.min(ph.end + wait, cap)) {
       this.phase++; this.t0 = now; this.t = 0; this.emit();
     }
-    if (Object.keys(this.moving).length || this.t < this.engine.settledAt(this.phase) + 50 || (this.mode === 'auto' && this.phase < this.lastPhase())) this.run();
+    if (Object.keys(this.moving).length || this.t < this.engine.settledAt(this.phase) + 50 || goesOn) this.run();
   }
 
   // ---- navigation
   next() {
     if (this.ov?.classList.contains('open')) return;
     if (this.spot) { this.closeSpot(); return; }
-    if (this.mode === 'steps' && this.phase < this.lastPhase()) {
+    if (this.slideMode() === 'steps' && this.phase < this.lastPhase()) {
       this.frozen = false;
       this.engine.seek(this.phase, this.endOf());
       this.phase++; this.t = 0; this.t0 = performance.now();
@@ -200,7 +210,7 @@ export class Player {
   prev() {
     if (this.ov?.classList.contains('open')) return;
     if (this.spot) { this.closeSpot(); return; }
-    if (this.mode === 'steps' && this.phase > 0) {
+    if (this.slideMode() === 'steps' && this.phase > 0) {
       this.phase--; this.t = this.endOf(); this.engine.seek(this.phase, this.t, true);
       this.t0 = performance.now() - this.t; this.emit(); this.run();
       return;
@@ -213,7 +223,7 @@ export class Player {
   }
   replay() { this.show(this.idx, { quiet: true }); }
   go(k: number) { if (k >= 0 && k < this.order.length) { this.show(k, { dir: k < this.idx ? -1 : 1 }); this.wake(); } }
-  toggleMode() { this.setMode(this.mode === 'steps' ? 'auto' : 'steps'); this.emit(); }
+  toggleMode() { this.forced = true; this.setMode(this.slideMode() === 'steps' ? 'auto' : 'steps'); this.emit(); }
   black() { this.blacked = !this.blacked; this.blackEl.classList.toggle('open', this.blacked); this.emit(); }
   /** A browser refuses to close a window no script opened, so the show has to end without that too. */
   end() {
@@ -312,12 +322,18 @@ export class Player {
     this.frozen = was;
     if (!was) { this.t0 = performance.now() - this.t; this.run(); }
   }
-  audit() { return audit(this.section.querySelector('.p-body')!, this.scale); }
+  audit() {
+    const r = audit(this.section.querySelector('.p-body')!, this.scale), sc = this.engine.scene;
+    for (const m of sc?.timing.errors ?? []) r.issues.push({ code: 'scene-error', severity: 'error', message: `Scene ${this.order[this.idx].scene!.name}: ${m}`, fix: 'Fix the scene file in scenes/. It ran up to the error' });
+    return r;
+  }
+  /** What a scene measured on this slide, for the tools to record. */
+  sceneTiming() { const t = this.engine.scene?.timing; return t ? { durs: t.durs, rests: t.rests, builds: t.builds, names: t.names } : null; }
   state() {
     const s = this.order[this.idx];
     return {
       slide: this.idx + 1, id: s.id, total: this.order.length, step: this.phase, steps: s.phases.length - 1,
-      t: this.t, mode: this.mode, spot: this.spot?.id ?? this.heldSpot, rested: this.t >= this.engine.settledAt(this.phase),
+      t: this.t, mode: this.slideMode(), spot: this.spot?.id ?? this.heldSpot, rested: this.t >= this.engine.settledAt(this.phase),
       label: slideLabels(this.deck.slides).get(s.id), depth: s.depth ?? 0, deep: this.kids().length,
     };
   }
@@ -333,7 +349,7 @@ export class Player {
       present: 'state', id: s.id, nextId: to ? this.order[to.i].id : null, nextIsUp: !!to?.up,
       label: slideLabels(this.deck.slides).get(s.id)!, total: this.deck.slides.filter(x => !x.parent).length,
       deep: this.kids().map(k => this.order[k].title), trail,
-      seed: this.seed, acts: this.played(), spot: this.spot?.id ?? null, phase: this.phase, t: this.t, mode: this.mode, black: this.blacked,
+      seed: this.seed, acts: this.played(), spot: this.spot?.id ?? null, phase: this.phase, t: this.t, mode: this.slideMode(), black: this.blacked,
     };
     this.popup?.postMessage(state, '*');
   }
@@ -345,7 +361,7 @@ export class Player {
   }
   private paint() {
     if (!this.count) return;
-    const s = this.order[this.idx], st = this.mode === 'steps' && s.phases.length > 1 ? ` · ${this.phase}/${s.phases.length - 1}` : '';
+    const s = this.order[this.idx], st = this.slideMode() === 'steps' && s.phases.length > 1 ? ` · ${this.phase}/${s.phases.length - 1}` : '';
     this.count.textContent = `${slideLabels(this.deck.slides).get(s.id)} / ${this.deck.slides.filter(x => !x.parent).length}${st}`;
   }
   private buildUi(host: HTMLElement) {

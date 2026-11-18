@@ -61,7 +61,7 @@ data: ${JSON.stringify(data)}
       refsTimer = setTimeout(() => broadcast('refs', 1), 150);
       return;
     }
-    const full = /^(tracks|macros)[\\/]/.test(String(f));
+    const full = /^(tracks|macros|scenes)[\\/]/.test(String(f));
     const slide = /^slides[\\/](.+)\.slide$/.exec(String(f))?.[1];
     if (slide && !changed(String(f))) return;
     if (slide) edited.add(slide);

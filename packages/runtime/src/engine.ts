@@ -1,12 +1,16 @@
 // One slide's timeline. seek(phase, t) is the pure function of the whole system: it puts the
 // slide into the state for that moment, from any earlier state, with no clock involved.
-import type { CompiledSlide, Track } from '../../core/src/compiled.ts';
+import type { CompiledSlide, SceneTiming, Track } from '../../core/src/compiled.ts';
 import { bindTrack, type Apply, type BindApi } from './tracks.ts';
 import { clamp01, ease } from './ease.ts';
+import { simFor, type Sim } from './scene.ts';
 
 const NS = 'http://www.w3.org/2000/svg';
 interface Bound { t: Track; apply: Apply; f: (x: number) => number; last: number; }
 interface BoundLoop { phase: number; every: number; after: number; len: number; b: Bound[]; }
+// Measured once per compiled slide: a remount, or a seek, replays the same scene the same way.
+const timed = new WeakMap<CompiledSlide, SceneTiming & { errors: string[] }>();
+const ALWAYS_MS = 12000;
 const progress = (b: Bound, t: number) => (b.t.d <= 0 ? (t >= b.t.s ? 1 : 0) : clamp01((t - b.t.s) / b.t.d));
 
 export class Engine {
@@ -18,6 +22,7 @@ export class Engine {
   actions: Record<string, Bound[]> = {};
   acts?: Record<string, number>;      // ms into each action. Unset: the finished drawing
   windowMs: number;
+  scene?: { sim: Sim; timing: SceneTiming & { errors: string[] } };
   private overlay: SVGSVGElement | null = null;
   private layers = new Map<SVGSVGElement, SVGGElement>();
 
@@ -25,6 +30,9 @@ export class Engine {
     this.root = root;
     this.slide = slide;
     this.windowMs = slide.rest === 'always' ? Infinity : slide.rest;
+    // First, as it replays the scene's root: anything inside is rebuilt each time, so nothing else binds there.
+    const sceneRoot = slide.scene && root.querySelector(`[data-n="${slide.scene.n}"]`);
+    if (sceneRoot) this.fitScene(sceneRoot);
     const nodes = new Map<number, Element>();
     root.querySelectorAll('[data-n]').forEach(e => nodes.set(+e.getAttribute('data-n')!, e));
     const api: BindApi = {
@@ -43,6 +51,27 @@ export class Engine {
       this.loops.push({ phase: i, every: l.every, after: l.after, len: l.len, b: l.tracks.map(bind) })));
     for (const s of slide.spots) this.spots[s.id] = s.tracks.map(bind);
     for (const a of slide.actions ?? []) this.actions[a.id] = a.tracks.map(bind);
+  }
+
+  /** Times the scene by replaying it, then gives the slide a phase per scene step, as long as that step runs. */
+  private fitScene(el: Element) {
+    const slide = this.slide, { name, n } = slide.scene!, window = slide.rest === 'always' ? ALWAYS_MS : slide.rest;
+    const sim = simFor(el, name, window);
+    let m = timed.get(slide);
+    if (m) sim.timing = m;
+    else { m = sim.measure() as SceneTiming & { errors: string[] }; timed.set(slide, m); }
+    this.scene = { sim, timing: m };
+    const ph = slide.phases, endOf = (ts: Track[]) => ts.reduce((x, t) => (t.k === 'scene' ? x : Math.max(x, t.s + t.d)), 0);
+    for (let k = 0; k < m.durs.length; k++) {
+      ph[k] ??= { name: m.names[k] ?? `step ${k}`, tracks: [], loops: [], end: 0 };
+      let tr = ph[k].tracks.find(t => t.k === 'scene');
+      if (!tr) ph[k].tracks.push(tr = { k: 'scene', n, s: 0, d: 0, e: 'lin', a: { scene: name, index: k } });
+      tr.d = m.durs[k];
+      tr.a = { ...tr.a, window };
+      ph[k].end = Math.max(endOf(ph[k].tracks), m.durs[k]);
+    }
+    for (let k = m.durs.length; k < ph.length; k++) ph[k].tracks = ph[k].tracks.filter(t => t.k !== 'scene');
+    while (ph.length > Math.max(1, m.durs.length) && !ph[ph.length - 1].tracks.length && !ph[ph.length - 1].loops.length) ph.pop();
   }
 
   private layerFor(el: Element): SVGGElement {

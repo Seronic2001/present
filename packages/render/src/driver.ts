@@ -6,12 +6,12 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { compileDeck, type Diagnostic } from '@present/core';
+import { compileDeck, writeSceneTimings, type Diagnostic, type SceneTiming } from '@present/core';
 import { deckHtml, loadProjectMacros } from './bundle.ts';
 
 export interface Frame { slide: number; step?: number; t?: number; spot?: string; spotT?: number; actions?: Record<string, number>; }
 export interface Region { x: number; y: number; w: number; h: number; }
-export interface FilmstripView { columns?: number; region?: Region; action?: string; }
+export interface FilmstripView { columns?: number; region?: Region; action?: string; loop?: boolean; }
 
 const iframesSettled = (page: Page) => page.waitForFunction(() => [...document.querySelectorAll('iframe')].every(f => f.dataset.ready != null), undefined, { timeout: 3000 }).catch(() => undefined);
 
@@ -116,8 +116,39 @@ export class Renderer {
     for (let i = 1; i <= deck.slides.length; i++) out.push(...(await this.check(i)).diagnostics);
     return out;
   }
+  /** Times every scene by replaying it in the page, and records the result for the compiler. */
+  async measureScenes(): Promise<Record<string, SceneTiming>> {
+    const { deck } = compileDeck(this.dir);
+    const list = deck.slides.flatMap((s, i) => (s.scene ? [{ id: s.id, no: i + 1 }] : []));
+    if (!list.length) return {};
+    const page = await this.open(), out: Record<string, SceneTiming> = {};
+    for (const { id, no } of list) {
+      const t = await page.evaluate(n => { const p = (window as any).__present; p.seek({ slide: n, step: 0, t: 0 }); return p.player.sceneTiming(); }, no);
+      if (t) out[id] = t;
+    }
+    writeSceneTimings(this.dir, out);
+    return out;
+  }
+  /** Where a step's resting loop runs: from its build's end, for one cycle, or a scene's whole resting window. */
+  async loopWindow(no: number, step: number): Promise<{ from: number; span: number }> {
+    const page = await this.open();
+    const scene = await page.evaluate(([n, k]) => { const p = (window as any).__present; p.seek({ slide: n, step: k, t: 0 }); return p.player.sceneTiming(); }, [no, step]);
+    const { deck } = compileDeck(this.dir), s = deck.slides[no - 1], k = Math.min(step, s.phases.length - 1);
+    if (scene && scene.rests[k] != null) return { from: scene.builds[k], span: scene.rests[k] - scene.builds[k] };
+    const loops = s.phases.slice(0, k + 1).flatMap(p => p.loops);
+    if (!loops.length) throw new Error(`Step ${step} of this slide has no resting loop: nothing moves after its build`);
+    return { from: s.phases[k].end + Math.min(...loops.map(l => l.after)), span: Math.max(...loops.map(l => l.every)) };
+  }
   /** A contact sheet of one step over time, so motion can be judged from a still. */
   async filmstrip(no: number, step: number, frames = 8, spanMs?: number, spot?: string, view: FilmstripView = {}): Promise<Buffer> {
+    if (view.loop) {
+      const w = await this.loopWindow(no, step), span = spanMs ?? w.span, shots: { label: string; b64: string }[] = [];
+      for (let i = 0; i < frames; i++) {
+        const t = Math.round(w.from + span * i / Math.max(1, frames - 1));
+        shots.push({ label: `${t}ms (loop +${t - w.from})`, b64: (await this.frame({ slide: no, step, t }, view.region)).png.toString('base64') });
+      }
+      return this.sheet(shots, view.columns);
+    }
     const { deck } = compileDeck(this.dir);
     const spotEnd = spot ? 700 + (deck.slides[no - 1].spots.find(s => s.id === spot)?.end ?? 0) : 0;
     const acted = view.action ? deck.slides[no - 1].actions?.find(a => a.id === view.action) : undefined;

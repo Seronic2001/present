@@ -11,7 +11,7 @@ This folder is a Present deck: plain text, and the only source of truth. Use the
 5. Pick a pattern for each slide's job, and add it with \`addSlide\` and \`pattern\`. Then replace its text with the real content.
 6. Write the finished drawing first: the markup is the slide after its last step, and motion subtracts from it. The one exception is the \`leave\` cue, for showing something and then taking it away.
 7. \`slide_render\` and look at it. Fix diagnostics. \`deck_contact_sheet\` shows the whole deck at once, or with \`changed\` only what changed since the last one.
-8. Then write the score, with phrases before single cues, and check motion with \`slide_filmstrip\`.
+8. Then write the score, with phrases before single cues, and check motion with \`slide_filmstrip\`; \`loop: true\` films what moves while the presenter talks.
 9. \`annotations_list\` for what the human asked for, then \`annotations_resolve\`.
 
 ## Main path and deep dives
@@ -20,7 +20,8 @@ A deck is a tree. Keep the main path short enough for the time slot, one argumen
 ## Keep what works
 The library holds components from every earlier project. It grows by itself, so do not ask the human before saving to it.
 - Check \`library\` in the catalog before building something. \`library_add\` copies a component into this deck, which then owns the source.
-- Phrases, macros and tracks this deck defines are saved after each \`deck_apply\` and \`deck_check\`. Give each a one-line \`doc\`, or a first-line comment, and a general name.
+- \`library_search\` finds an item by what it is for ("compare two options by cost"), not only by name.
+- Phrases, macros, tracks and scenes this deck defines are saved after each \`deck_apply\` and \`deck_check\`. Give each a one-line \`doc\`, or a first-line comment, and a general name.
 - When a slide comes out well and its structure would suit another talk, save it with \`library_save\` and \`slide\`. Replace its content with placeholder text first if it holds anything private: the library outlives this deck.
 - \`deck_check\` reports what this deck could give the library under \`library\`: repeated drawings, repeated beats, and whether anything was saved. Act on it before calling a deck finished.
 - Never save facts, figures or wording from \`references/\`. Save the form, not the content.
@@ -29,7 +30,8 @@ The library holds components from every earlier project. It grows by itself, so 
 ## Compose, do not redraw
 - Every figure has the same anatomy (\`.part\` holding \`.seg\`, \`.node\`, \`.body\`), so one phrase moves them all: \`- over: .part\` with \`use: arrive\` is a step per part.
 - A beat you write twice becomes a phrase under \`phrases:\` in deck.yaml. A drawing you make twice becomes a macro in \`macros/\`, written as \`writingMacros\` in the catalog shows. Do not generate slides from a script: a later \`deck_apply\` edit would be lost when it runs again.
-- Custom code in \`tracks/\` is the last resort. Try \`animate\` first: it moves any number in an attribute or style.
+- Try built-in cues and phrases first: \`build\` brings a Diagram in by its links, \`swap\` replaces one panel with the next, \`animate\` moves any number in an attribute or style and carries on from where it last stopped. For choreography they cannot express (cause and effect, a spark on a stroke, loops at several rates), write a scene: \`scenes\` in the catalog. Present times each step for you. A track in \`tracks/\` is for one new kind of motion on one element.
+- A good slide moves like this: many small reveals, staggered 60 to 160ms, each 260 to 600ms; nothing changes without something visibly causing it (a particle arrives, then the target lights); and something keeps moving in a loop while the presenter talks.
 
 ## Rules
 - Every number on a slide traces to a source named in the plan. If you cannot find one, say so; never invent a figure.

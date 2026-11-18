@@ -12,7 +12,9 @@ export interface MacroCtx {
   diagram: boolean; boxes: Map<string, Rect>; slide: string; diags: Diagnostic[];
   text?: string;                                // the text between a macro's tags
   read?: (path: string) => string | null;       // a file in the deck; absent when only checking an edit
+  terms?: TermGroup[];                          // define= on the elements around this one
 }
+export interface TermGroup { defs: { sym: string; def: string }[]; used: Set<string>; id?: string; }
 export interface Rect { x: number; y: number; w: number; h: number; }
 type A = Record<string, string>;
 export interface MacroDef {
@@ -37,6 +39,10 @@ export const pass = (a: A, extra = '') => {
 const toneVar = (t?: string) => (t ? `--tone:var(--${t});` : '');
 const dataTone = (t?: string) => (t?.startsWith('data-') ? toneVar(t) : '');   // a data colour has no styles of its own
 const withStyle = (a: A, s: string) => ({ ...a, style: s + (a.style ?? '') });
+// A theme sets each kind of text in px, so a container's font-size reaches nothing: size sets the body text by a variable.
+const textSize = (a: A) => (a.size ? `font-size:${num(a, 'size')}px;` : '');
+const bodySize = (a: A) => (a.size ? `--text-size:${num(a, 'size')}px;` : '');
+const fillAttr = (a: A) => (a.fill != null && a.fill !== 'false' ? ' data-fill=""' : '');
 
 export function iconPath(name: string) {
   const o = octicons[name];
@@ -80,6 +86,15 @@ const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** Marks only the first place each defined symbol appears: it is explained once, where it is first read. */
 function markTerms(tex: string, a: A, c: MacroCtx) {
   const defs = definitions(unescape(a.define ?? '')), found: { sym: string; def: string }[] = [];
+  // A define on a parent (a Card, a Diagram, a group) covers every formula inside it: each symbol is marked where it first appears.
+  for (const g of c.terms ?? []) for (const { sym, def } of g.defs) {
+    if (!sym || !def || g.used.has(sym)) continue;
+    const re = new RegExp(`(?<![\\\\A-Za-z])${reEsc(sym)}(?![A-Za-z])`);
+    if (!re.test(tex)) continue;
+    tex = tex.replace(re, `{\\htmlData{term=${found.length}}{${sym}}}`);
+    found.push({ sym, def });
+    g.used.add(sym);
+  }
   for (const { sym, def } of defs) {
     const bad = (message: string, fix: string) => c.diags.push({ code: 'bad-define', severity: 'error', slide: c.slide, id: a.id, message, fix });
     if (!sym || !def) { bad(`define "${sym}" has no meaning`, 'Write define="H: what H means; b: what b means"'); continue; }
@@ -147,27 +162,31 @@ export const MACROS: Record<string, MacroDef> = {
     example: '<Center><Title>Learnings from <em>the field</em></Title></Center>',
     html: a => `<h1${pass(a, 'p-hero')} data-words=""><slot/></h1>`,
   },
-  Sub: { doc: 'Muted subtitle.', props: '', example: '<Sub>A short framing sentence.</Sub>', html: a => `<p${pass(a, 'p-sub')}><slot/></p>` },
-  Text: { doc: 'Body text.', props: '', example: '<Text>One idea.</Text>', html: a => `<p${pass(a, 'p-text')}><slot/></p>` },
+  Sub: { doc: 'Muted subtitle. size in px.', props: 'size?', example: '<Sub>A short framing sentence.</Sub>', html: a => `<p${pass(withStyle(a, textSize(a)), 'p-sub')}><slot/></p>` },
+  Text: { doc: 'Body text, 26px. size in px.', props: 'size?', example: '<Text size="30">One idea.</Text>', html: a => `<p${pass(withStyle(a, textSize(a)), 'p-text')}><slot/></p>` },
   Eyebrow: { doc: 'Small accent label pill.', props: '', example: '<Eyebrow>Part one</Eyebrow>', html: a => `<div${pass(a)}><span class="p-eyebrow"><slot/></span></div>` },
-  Stack: { doc: 'Vertical layout.', props: 'gap?', example: '<Stack gap="16">...</Stack>', html: a => `<div${pass(withStyle(a, a.gap ? `--gap:${a.gap}px;` : ''), 'p-stack')}><slot/></div>` },
-  Row: { doc: 'Horizontal layout.', props: 'gap?, align?', example: '<Row gap="16">...</Row>', html: a => `<div${pass(withStyle(a, (a.gap ? `--gap:${a.gap}px;` : '') + (a.align ? `--align:${a.align};` : '')), 'p-row')}><slot/></div>` },
+  Stack: { doc: 'Vertical layout. size sets the body text inside it, in px.', props: 'gap?, size?', example: '<Stack gap="16">...</Stack>', html: a => `<div${pass(withStyle(a, (a.gap ? `--gap:${a.gap}px;` : '') + bodySize(a)), 'p-stack')}><slot/></div>` },
+  Row: { doc: 'Horizontal layout. size sets the body text inside it, in px.', props: 'gap?, align?, size?', example: '<Row gap="16">...</Row>', html: a => `<div${pass(withStyle(a, (a.gap ? `--gap:${a.gap}px;` : '') + (a.align ? `--align:${a.align};` : '') + bodySize(a)), 'p-row')}><slot/></div>` },
   Center: { doc: 'Centred vertical layout.', props: '', example: '<Center>...</Center>', html: a => `<div${pass(a, 'p-center')}><slot/></div>` },
   Columns: {
-    doc: 'Columns by ratio.', props: 'ratio (e.g. 1:1.3), gap?', example: '<Columns ratio="1:1.3">...</Columns>',
+    doc: 'Columns by ratio. fill stretches them, and the cards in them, down to the bottom of the slide. size sets the body text inside, in px.', props: 'ratio (e.g. 1:1.3), gap?, fill?, size?', example: '<Columns ratio="1:1.3" fill="">...</Columns>',
     html: a => {
       const cols = (a.ratio ?? '1:1').split(':').map(x => `minmax(0,${parseFloat(x) || 1}fr)`).join(' ');
-      return `<div${pass(withStyle(a, `grid-template-columns:${cols};` + (a.gap ? `--gap:${a.gap}px;` : '')), 'p-columns')}><slot/></div>`;
+      return `<div${pass(withStyle(a, `grid-template-columns:${cols};` + (a.gap ? `--gap:${a.gap}px;` : '') + bodySize(a)), 'p-columns')}${fillAttr(a)}><slot/></div>`;
     },
   },
-  Grid: { doc: 'Equal grid.', props: 'cols, gap?', example: '<Grid cols="3">...</Grid>', html: a => `<div${pass(withStyle(a, `--cols:${a.cols ?? 3};` + (a.gap ? `--gap:${a.gap}px;` : '')), 'p-grid')}><slot/></div>` },
+  Grid: {
+    doc: 'Equal grid. fill stretches its rows, and the cards in them, down to the bottom of the slide, so a few cards do not sit in the top half. size sets the body text inside, in px.',
+    props: 'cols, gap?, fill?, size?', example: '<Grid cols="3" fill="" size="30">...</Grid>',
+    html: a => `<div${pass(withStyle(a, `--cols:${a.cols ?? 3};` + (a.gap ? `--gap:${a.gap}px;` : '') + bodySize(a)), 'p-grid')}${fillAttr(a)}><slot/></div>`,
+  },
   Card: {
-    doc: 'Card. In HTML it flows with its content. In a Diagram it needs x, y, w, h and is a box for Link.',
-    props: 'id, tone (accent|ok|warn|danger), label?, title?, icon?; in a Diagram: x y w h',
+    doc: 'Card. In HTML it flows with its content; size sets its body text in px, and its title in proportion. In a Diagram it needs x, y, w, h and is a box for Link.',
+    props: 'id, tone (accent|ok|warn|danger), label?, title?, icon?, size?; in a Diagram: x y w h',
     example: '<Card id="a" tone="danger" label="What we assume" icon="circle-slash">...</Card>',
     html: (a, c) => {
       const head = a.label || a.icon ? `<div class="p-card-head"><span>${esc(a.label ?? '')}</span>${a.icon ? iconSvg(a.icon, c, ' class="p-icon"') : ''}</div>` : '';
-      return `<div${pass(withStyle(a, toneVar(a.tone)), 'p-card')}${a.tone ? ` data-tone="${a.tone}"` : ''}>${head}${a.title ? `<h3 class="p-card-title">${esc(a.title)}</h3>` : ''}<slot/></div>`;
+      return `<div${pass(withStyle(a, toneVar(a.tone) + bodySize(a)), 'p-card')}${a.tone ? ` data-tone="${a.tone}"` : ''}>${head}${a.title ? `<h3 class="p-card-title">${esc(a.title)}</h3>` : ''}<slot/></div>`;
     },
     svg: (a, c) => {
       const x = num(a, 'x'), y = num(a, 'y'), w = num(a, 'w'), h = num(a, 'h'), col = a.tone ? `var(--${a.tone})` : 'var(--muted)';
@@ -182,7 +201,7 @@ export const MACROS: Record<string, MacroDef> = {
   },
   Pill: { doc: 'Small rounded tag.', props: '', example: '<Pill>Model</Pill>', html: a => `<span${pass(a, 'p-pill')}><slot/></span>` },
   Pills: { doc: 'Row of pills.', props: '', example: '<Pills><Pill>A</Pill></Pills>', html: a => `<div${pass(a, 'p-pills')}><slot/></div>` },
-  Item: { doc: 'Bullet line.', props: '', example: '<Item>One point</Item>', html: a => `<div${pass(a, 'p-item')}><span><slot/></span></div>` },
+  Item: { doc: 'Bullet line. size in px.', props: 'size?', example: '<Item>One point</Item>', html: a => `<div${pass(withStyle(a, textSize(a)), 'p-item')}><span><slot/></span></div>` },
   Icon: {
     doc: 'Octicon by name. In a Diagram give x, y, size.', props: 'name, x?, y?, size?, tone?',
     example: '<Icon name="lock" x="48" y="159" size="30" />',
@@ -200,14 +219,14 @@ export const MACROS: Record<string, MacroDef> = {
     html: (a, c) => `<svg${pass(a, 'p-diagram')} viewBox="${a.viewBox ?? '0 0 1600 700'}" role="img" aria-label="${esc(a.alt ?? '')}"><defs><marker id="${c.slide}-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs><slot/></svg>`,
   },
   Box: {
-    doc: 'Diagram box, a target for Link. Text in title is centred; use \\n for a second line. size sets the title in px, default 20, and sub follows it. A data-1 to data-6 tone colours the box as content.',
-    props: 'id, x, y, w, h, tone?, title?, sub?, label?, r?, size?', example: '<Box id="kpi" x="40" y="96" w="400" h="120" tone="accent" title="ROI" />',
+    doc: 'Diagram box, a target for Link. Text in title is centred; use \\n for a second line. size sets the title in px, default 20. sub is a smaller line under it, at subSize px: by default three quarters of size, or 14 with no size. A data-1 to data-6 tone colours the box as content.',
+    props: 'id, x, y, w, h, tone?, title?, sub?, label?, r?, size?, subSize?', example: '<Box id="kpi" x="40" y="96" w="400" h="120" tone="accent" title="ROI" sub="what the customer pays for" size="26" />',
     svg: a => {
       const x = num(a, 'x'), y = num(a, 'y'), w = num(a, 'w'), h = num(a, 'h');
       const cy = y + h / 2 + (a.sub ? -6 : 7);
-      const size = a.size ? num(a, 'size') : 0, lh = size ? Math.round(size * 1.3) : 26, sm = size ? Math.round(size * .7) : 0;
+      const size = a.size ? num(a, 'size') : 0, lh = size ? Math.round(size * 1.3) : 26, sm = a.subSize ? num(a, 'subSize') : size ? Math.round(size * .75) : 0;
       const mid = size ? y + h / 2 + (a.sub ? -size * .3 : size * .35) : cy;
-      return `<g${pass(withStyle(a, dataTone(a.tone)))} data-box=""${a.tone ? ` data-tone="${a.tone}"` : ''}><rect class="card" x="${x}" y="${y}" width="${w}" height="${h}" rx="${a.r ?? 9}"/>${a.label ? `<text class="m lbl" x="${x + 20}" y="${y + 32}">${esc(a.label)}</text>` : ''}${a.title ? wrapText(a.title, x + w / 2, mid, lh, 'nm-l', size) : ''}${a.sub ? wrapText(a.sub, x + w / 2, mid + lh, size ? Math.round(sm * 1.4) : 20, 'sm', sm) : ''}<slot/></g>`;
+      return `<g${pass(withStyle(a, dataTone(a.tone)))} data-box=""${a.tone ? ` data-tone="${a.tone}"` : ''}><rect class="card" x="${x}" y="${y}" width="${w}" height="${h}" rx="${a.r ?? 9}"/>${a.label ? `<text class="m lbl" x="${x + 20}" y="${y + 32}">${esc(a.label)}</text>` : ''}${a.title ? wrapText(a.title, x + w / 2, mid, lh, 'nm-l', size) : ''}${a.sub ? wrapText(a.sub, x + w / 2, mid + Math.max(lh, sm ? Math.round(size * .55 + sm * .95) : 0), sm ? Math.round(sm * 1.35) : 20, 'sm', sm) : ''}<slot/></g>`;
     },
   },
   Chip: {
@@ -229,7 +248,8 @@ export const MACROS: Record<string, MacroDef> = {
       }
       const cls = a.dashed != null ? 'conn-d' : a.tone === 'accent' ? 'conn-a' : 'conn';
       const st = a.tone && a.tone !== 'accent' ? withStyle(a, `stroke:var(--${a.tone});`) : a;
-      return `<path${pass(st, cls)} d="${linkPath(p, q)}"${a.arrow === 'false' ? '' : ` marker-end="url(#${c.slide}-arrow)"`}/>`;
+      // The ends are kept, so the build cue knows what each link carries the eye to.
+      return `<path${pass(st, cls)} d="${linkPath(p, q)}" data-from="${attrText(a.from)}" data-to="${attrText(a.to)}"${a.arrow === 'false' ? '' : ` marker-end="url(#${c.slide}-arrow)"`}/>`;
     },
   },
   Label: {
@@ -314,8 +334,71 @@ export const MACROS: Record<string, MacroDef> = {
       return `<iframe${pass(withStyle(a, size), 'p-embed')} title="${attrText(a.alt ?? '')}" sandbox="allow-scripts" srcdoc="${attrText(embedded(page ?? ''))}"></iframe>`;
     },
   },
+  Code: {
+    doc: 'A code or terminal panel: monospace, syntax-coloured, one line per .part (ids <id>-1, <id>-2...; each line\'s text is <id>-1-t, class code-text). Write the lines between the tags, or in lines with \\n between them. lang (sql|js|ts|py|sh) colours its keywords, strings and comments; a sh line starting "$ " has a muted prompt. ok and err are prefixes that tint a whole line, for output: ok="✓" err="ERROR". bold lists words to set bold. label is a caps title above the panel. Type it in with `- use: type-code` and `on: <id>`: the built-in type keeps the colours. In a Diagram give x, y, w (h fits the lines unless given).',
+    props: 'id, lines?, lang?, size?, lh?, label?, bold?, ok?, err?, pad?; in a Diagram: x, y, w?, h?',
+    example: '<Code id="q" x="80" y="120" w="760" lang="sql" label="Query">SELECT name\nFROM users\nWHERE id = 7;</Code>',
+    svg: (a, c) => codePanel(a, c, true),
+    html: (a, c) => codePanel(a, c, false),
+  },
+  Swap: {
+    doc: 'Panels in one place, one showing at a time: each child is a panel (a <g>, a Card, a Code...), drawn stacked. The swap cue changes which shows: `- swap: <id>` with `to: 2`. The first panel shows at the start. Only one panel counts towards the words on the slide.',
+    props: 'id',
+    example: '<Swap id="out"><g id="out-1">...</g><g id="out-2">...</g></Swap>',
+    svg: a => `<g${pass(a, 'swap')}><slot/></g>`,
+    html: a => `<div${pass(a, 'p-swap')}><slot/></div>`,
+  },
   ...FIGURES,
 };
+
+// ---- Code: highlighting is a small tokenizer, not a parser. Enough to tell keywords, strings and comments apart.
+const KEYWORDS: Record<string, string> = {
+  sql: 'select from where join inner left right outer full on and or not order by group having limit offset insert into values delete update set create table index view drop alter add as in exists null is between like distinct union all except intersect with case when then else end primary key foreign references explain analyze begin commit rollback count sum avg min max asc desc returning',
+  js: 'const let var function return if else for while do switch case break continue class new import export from default await async yield try catch finally throw typeof instanceof in of this null undefined true false',
+  py: 'def return if elif else for while class import from as with in not and or is none true false lambda yield async await pass break continue try except finally raise global nonlocal assert del print self',
+  sh: 'sudo cd ls cat echo export grep curl git npm npx node python pip make docker cargo psql',
+};
+KEYWORDS.ts = `${KEYWORDS.js} type interface extends implements enum readonly private public protected as keyof`;
+const COMMENT: Record<string, RegExp> = { sql: /--.*$/, js: /\/\/.*$/, ts: /\/\/.*$/, py: /#.*$/, sh: /(^|\s)#.*$/ };
+
+function codePanel(a: A, c: MacroCtx, svg: boolean) {
+  const raw = a.lines != null ? unescape(a.lines).split('\\n') : unescape(c.text ?? '').replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n');
+  const indent = Math.min(...raw.filter(l => l.trim()).map(l => /^\s*/.exec(l)![0].length), 99);
+  const lines = raw.map(l => l.slice(indent === 99 ? 0 : indent));
+  const lang = (a.lang ?? '').toLowerCase(), kw = new Set((KEYWORDS[lang] ?? '').split(' ').filter(Boolean));
+  const bold = new Set((a.bold ?? '').split(',').map(s => s.trim()).filter(Boolean));
+  const id = a.id ?? `${c.slide}-code`, size = num(a, 'size', 22), lh = num(a, 'lh', Math.round(size * 1.5)), pad = num(a, 'pad', 26);
+  if (!a.id) c.diags.push({ code: 'code-unnamed', severity: 'warning', slide: c.slide, message: 'Code has no id', fix: 'Give it an id, so its lines can be typed in: <id>-1-t, <id>-2-t...' });
+  const span = (cls: string, t: string) => (svg ? `<tspan style="${cls}">${esc(t)}</tspan>` : `<span style="${cls}">${esc(t)}</span>`);
+  const colour = (line: string) => {
+    if (a.err && line.trimStart().startsWith(unescape(a.err))) return { tint: 'var(--danger)', body: esc(line) };
+    if (a.ok && line.trimStart().startsWith(unescape(a.ok))) return { tint: 'var(--ok)', body: esc(line) };
+    let rest = line, tail = '', head = '';
+    if (lang === 'sh' && rest.startsWith('$ ')) { head = span('fill:var(--muted);color:var(--muted)', '$ '); rest = rest.slice(2); }
+    const cm = COMMENT[lang]?.exec(rest);
+    if (cm) { tail = span('fill:var(--muted);color:var(--muted);font-style:italic', cm[0]); rest = rest.slice(0, cm.index); }
+    const body = rest.split(/('(?:[^'\\]|\\.)*'?|"(?:[^"\\]|\\.)*"?|`[^`]*`?|\w+)/).map(t => {
+      if (!t) return '';
+      if (/^['"`]/.test(t)) return span('fill:var(--data-3);color:var(--data-3)', t);
+      if (kw.has(lang === 'sql' || lang === 'py' ? t.toLowerCase() : t)) return span(`fill:var(--accent);color:var(--accent)${bold.has(t) ? ';font-weight:700' : ''}`, t);
+      if (bold.has(t)) return span('font-weight:700', t);
+      return esc(t);
+    }).join('');
+    return { tint: '', body: head + body + tail };
+  };
+  if (!svg) {
+    const rows = lines.map((l, i) => { const { tint, body } = colour(l); return `<span class="part p-code-line" id="${id}-${i + 1}"><span class="body code-text" id="${id}-${i + 1}-t"${tint ? ` style="color:${tint}"` : ''}>${body || ' '}</span></span>`; }).join('');
+    return `<div${pass(withStyle(a, `font-size:${size}px;--lh:${lh}px;`), 'p-code')}>${a.label ? `<div class="p-code-label">${esc(unescape(a.label))}</div>` : ''}<pre class="p-code-body code-panel">${rows}</pre></div>`;
+  }
+  const x = num(a, 'x'), y = num(a, 'y'), w = num(a, 'w', 800), top = a.label ? 34 : 0;
+  const h = a.h != null ? num(a, 'h') : top + pad * 2 + (lines.length - 1) * lh + size;
+  const rows = lines.map((l, i) => {
+    const { tint, body } = colour(l), ty = round2(y + top + pad + size * .8 + i * lh);
+    return `<g class="part" id="${id}-${i + 1}"><text class="body code-text" id="${id}-${i + 1}-t" x="${x + pad}" y="${ty}" style="font-family:var(--font-mono);font-size:${size}px;white-space:pre;fill:${tint || 'var(--ink)'}">${body}</text></g>`;
+  }).join('');
+  const label = a.label ? `<text class="m lbl" x="${x}" y="${y + 20}">${esc(unescape(a.label))}</text>` : '';
+  return `<g${pass({ ...a, id }, 'code')}>${label}<rect class="code-panel" x="${x}" y="${y + top}" width="${w}" height="${h - top}" rx="12"/>${rows}</g>`;
+}
 
 const isMacro = (n: XNode) => n.type === 'tag' && !!n.name && /^[A-Z]/.test(n.name);
 
@@ -336,9 +419,25 @@ export function expand(n: XNode, c: MacroCtx, project: Record<string, MacroDef> 
   if (n.type !== 'tag' && !n.children) return n;
   const inDiagram = c.diagram || n.name === 'svg' || n.name === 'Diagram';
   const kids: XNode[] = [];
-  for (const ch of n.children ?? []) {
-    if (ch.type === 'comment') continue;
-    if (!isMacro(ch)) { kids.push(expand(ch, { ...c, diagram: inDiagram }, project)); continue; }
+  for (const ch0 of n.children ?? []) {
+    if (ch0.type === 'comment') continue;
+    // define= on anything but a formula is for the formulas inside it.
+    const define = ch0.type === 'tag' && ch0.name !== 'Math' ? ch0.attribs?.define : undefined;
+    if (define == null) { expandOne(ch0, c); continue; }
+    const group: TermGroup = { defs: definitions(unescape(define)), used: new Set(), id: ch0.attribs?.id };
+    if (!isMacro(ch0)) delete ch0.attribs!.define;
+    expandOne(ch0, { ...c, terms: [...(c.terms ?? []), group] });
+    for (const { sym, def } of group.defs) {
+      const bad = (message: string, fix: string) => c.diags.push({ code: 'bad-define', severity: 'error', slide: c.slide, id: group.id, message, fix });
+      if (!sym || !def) bad(`define "${sym}" has no meaning`, 'Write define="H: what H means; b: what b means"');
+      else if (!group.used.has(sym)) bad(`define names "${sym}", which is in no formula inside`, 'Name a symbol exactly as the LaTeX of a <Math> inside writes it, like x_i or \\theta');
+    }
+  }
+  n.children = kids;
+  return n;
+
+  function expandOne(ch: XNode, c: MacroCtx) {
+    if (!isMacro(ch)) { kids.push(expand(ch, { ...c, diagram: inDiagram }, project)); return; }
     const def = project[ch.name!] ?? MACROS[ch.name!];
     const childCtx = { ...c, diagram: inDiagram, text: textOf(ch) };
     const f = def && (inDiagram ? def.svg ?? (ch.name === 'Icon' ? def.html : undefined) : def.html ?? undefined);
@@ -349,9 +448,9 @@ export function expand(n: XNode, c: MacroCtx, project: Record<string, MacroDef> 
         message: known ? `<${ch.name}> cannot be used ${inDiagram ? 'inside' : 'outside'} a Diagram` : `Unknown macro <${ch.name}>`,
         fix: known ? 'Move it, or use its counterpart' : `Known macros: ${Object.keys(MACROS).join(', ')}`,
       });
-      continue;
+      return;
     }
-    const known = new Set([...def.props.matchAll(/[A-Za-z][A-Za-z0-9]*/g)].map(m => m[0]).concat(['id', 'class', 'style', 'spot', 'goto', 'act', 'data-src', 'data-n']));
+    const known = new Set([...def.props.matchAll(/[A-Za-z][A-Za-z0-9]*/g)].map(m => m[0]).concat(['id', 'class', 'style', 'spot', 'goto', 'act', 'define', 'data-src', 'data-n']));
     for (const k of Object.keys(ch.attribs ?? {})) {
       if (!known.has(k) && !k.startsWith('data-') && !k.startsWith('aria-')) c.diags.push({ code: 'unknown-prop', severity: 'warning', slide: c.slide, id: ch.attribs?.id, message: `<${ch.name}> ignores ${k}`, fix: `Props: ${def.props || 'none'}` });
     }
@@ -368,8 +467,6 @@ export function expand(n: XNode, c: MacroCtx, project: Record<string, MacroDef> 
     fillSlot(out, expandedKids);
     kids.push(...(out.children ?? []));
   }
-  n.children = kids;
-  return n;
 }
 
 function fillSlot(n: XNode, kids: XNode[]) {

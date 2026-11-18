@@ -3,6 +3,7 @@ import type { CompiledDeck } from '../../core/src/compiled.ts';
 import { Player, type SeekTarget } from './player.ts';
 import { presenterView } from './presenter.ts';
 import { registerTrack, type TrackFactory } from './tracks.ts';
+import { registerScene, type SceneFn } from './scene.ts';
 
 declare global {
   interface Window {
@@ -14,11 +15,11 @@ declare global {
       player: Player;
       track(name: string, f: TrackFactory): void;
     };
-    Present: { track(name: string, f: TrackFactory): void };
+    Present: { track(name: string, f: TrackFactory): void; scene(name: string, f: SceneFn): void };
   }
 }
 
-window.Present = { track: registerTrack };
+window.Present = { track: registerTrack, scene: registerScene };
 
 export function boot(deck: CompiledDeck) {
   if (new URLSearchParams(location.search).has('presenter')) { presenterView(deck, document.body); return; }

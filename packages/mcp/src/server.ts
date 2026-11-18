@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { isAbsolute, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { createDeck } from './connect.ts';
-import { addFromLibrary, applyOps, findDecks, noteOutsideEdits, upgradeDeck, DECK_FORMAT, readDeck, reuseReport, groupDiagnostics, patchPlan, planMarkdown, planProgress, reviewPlan, savePlan, catalog, compileDeck, CUES, deckPhrases, harvest, listLibrary, PATTERNS, readItem, removeFromLibrary, revisionOf as rev, saveToLibrary, confine, deckOutline, listReferences, readAnnotations, readReference, resolveAnnotations, slidePath, undo, walk, parseSlide, revisionOf, type Op } from '@present/core';
+import { addFromLibrary, applyOps, findDecks, noteOutsideEdits, upgradeDeck, DECK_FORMAT, readDeck, reuseReport, groupDiagnostics, patchPlan, planMarkdown, planProgress, reviewPlan, savePlan, catalog, compileDeck, CUES, deckPhrases, harvest, listLibrary, libraryDir, searchLibrary, sceneFiles, PATTERNS, readItem, removeFromLibrary, revisionOf as rev, saveToLibrary, confine, deckOutline, listReferences, readAnnotations, readReference, resolveAnnotations, slidePath, undo, walk, parseSlide, revisionOf, type Op } from '@present/core';
 import { readFileSync } from 'node:fs';
 import { exportHtml, exportPdf, exportPng, exportPptx, loadProjectMacros, Renderer } from '@present/render';
 
@@ -36,6 +36,14 @@ export async function serveMcp(start: string) {
   };
   await loadProjectMacros(dir);     // edits compile against the deck's own macros from the first call
   const keep = () => { try { return harvest(dir).map(i => i.name); } catch { return []; } };   // never fails an edit
+  // Scenes are timed by replaying them in a browser. Only a deck with scenes pays for that.
+  const measure = async () => {
+    if (!sceneFiles(dir).size) return undefined;
+    try {
+      const t = await r.measureScenes();
+      return Object.keys(t).length ? Object.fromEntries(Object.entries(t).map(([id, x]) => [id, { steps: x.durs.length - 1, durs: x.durs, rests: x.rests }])) : undefined;
+    } catch (e: any) { return { error: String(e.message ?? e) }; }
+  };
   keep();
   const server = new McpServer({ name: 'present', version: '0.1.0' });
   const slideRef = z.union([z.string(), z.number()]).describe('Slide id, or its 1-based number');
@@ -108,7 +116,7 @@ export async function serveMcp(start: string) {
 
   server.tool('catalog', 'Everything a slide can be made of: patterns to start from, phrases, macros, cues, tokens and the file format, with examples. Read this first. It works before a deck exists.', {}, guard(async () => {
     await loadProjectMacros(dir);
-    return text({ ...(isDeck() ? {} : { next: missing() }), ...catalog(CUES, isDeck() ? deckPhrases(dir) : {}, listLibrary()) });
+    return text({ ...(isDeck() ? {} : { next: missing() }), ...catalog(CUES, isDeck() ? deckPhrases(dir) : {}, listLibrary(), libraryDir()) });
   }));
 
   server.tool('pattern_read', 'The full source of a pattern from the catalog. Read one to see how the parts compose, or to adapt it into addSlide or replaceSlide.', { name: z.string() }, guard(async ({ name }) => {
@@ -129,13 +137,17 @@ export async function serveMcp(start: string) {
   }));
 
   server.tool('deck_apply', `Apply an atomic list of ops. All compile or nothing is written. Reject on stale baseRevision: read again and redo.
-Ops (each object has "op"): setText{slide,id,text} setAttr{slide,id,name,value} insertNode{slide,markup,parent?|after?|before?} removeNode{slide,id} moveNode{slide,id,parent?|after?|before?} setScore{slide,score} setCueTiming{slide,cue,at?,dur?} setNotes{slide,notes} setBrief{slide,brief} setTitle{slide,title} setAlign{slide,align} setDeck{title?,mode?,dwell?,align?} addSlide{id,source|pattern,after?,under?} moveSlide{id,under?,after?} removeSlide{id} reorderSlides{order} replaceSlide{id,source}`,
+Ops (each object has "op"): setText{slide,id,text} setAttr{slide,id,name,value} insertNode{slide,markup,parent?|after?|before?} removeNode{slide,id} moveNode{slide,id,parent?|after?|before?} setScore{slide,score} setCueTiming{slide,cue,at?,dur?} setNotes{slide,notes} setBrief{slide,brief} setTitle{slide,title} setAlign{slide,align} setDeck{title?,mode?,dwell?,align?} addSlide{id,source|pattern,after?,under?} moveSlide{id,under?,after?} removeSlide{id} reorderSlides{order} replaceSlide{id,source} setStep{slide,step,cues?,name?,loop?,auto?} appendCue{slide,step,cue}
+setStep and appendCue change one step of a score: step 0 is the intro, 1 the first step, and one past the last adds a step. reorderSlides takes any subset, such as the main path: those slides swap places, and deep dives stay under theirs. A deck with scenes has them timed after the edit, under scenes.`,
     { baseRevision: z.string(), ops: z.array(z.object({ op: z.string() }).passthrough()) },
     guard(async ({ baseRevision, ops }) => {
       await loadProjectMacros(dir);
       const result = applyOps(dir, ops as unknown as Op[], baseRevision);
-      const summary = { ...result, diagnostics: groupDiagnostics(result.diagnostics) };
-      return text(result.ok ? { ...summary, savedToLibrary: keep() } : summary);
+      if (!result.ok) return text({ ...result, diagnostics: groupDiagnostics(result.diagnostics) });
+      const scenes = await measure();
+      // Timing a scene can change a slide's steps, so the diagnostics are of the deck as it now compiles.
+      const diagnostics = scenes ? compileDeck(dir).diagnostics : result.diagnostics;
+      return text({ ...result, diagnostics: groupDiagnostics(diagnostics), savedToLibrary: keep(), ...(scenes ? { scenes } : {}) });
     }));
 
   server.tool('library_add', 'Copy a component from the library into this deck, with what it depends on. The deck then owns the source. slideId adds its slide too. Refuses files that differ unless overwrite is set.',
@@ -152,10 +164,16 @@ Ops (each object has "op"): setText{slide,id,text} setAttr{slide,id,name,value} 
     }));
 
   server.tool('library_save', 'Save a component to the library for future projects, with everything it depends on. Do this without asking when something would be useful again. Give a slide id, or names of macros, tracks and phrases. The same name replaces the old one.',
-    { name: z.string().describe('General, not about this deck'), doc: z.string(), useWhen: z.string().optional(), slide: z.string().optional(), macros: z.array(z.string()).optional(), tracks: z.array(z.string()).optional(), phrases: z.array(z.string()).optional(), css: z.string().optional().describe('Styles it needs') },
+    { name: z.string().describe('General, not about this deck'), doc: z.string(), useWhen: z.string().optional(), slide: z.string().optional(), macros: z.array(z.string()).optional(), tracks: z.array(z.string()).optional(), scenes: z.array(z.string()).optional(), phrases: z.array(z.string()).optional(), css: z.string().optional().describe('Styles it needs') },
     guard(async a => text(saveToLibrary(dir, a))));
 
   server.tool('library_read', 'What is in a library item, before adding it.', { name: z.string() }, guard(async ({ name }) => text(readItem(name))));
+  server.tool('library_search', 'Find library items by what they are for, in your own words: "choose between two options by cost", "code typing in", "a request stopped at a gate". Then library_read and library_add.',
+    { query: z.string(), limit: z.number().optional() },
+    guard(async ({ query, limit }) => {
+      const hits = searchLibrary(query, limit);
+      return text(hits.length ? { results: hits, library: libraryDir() } : { results: [], library: libraryDir(), next: `Nothing matches. In the library: ${listLibrary().map(i => i.name).join(', ') || 'nothing yet'}` });
+    }));
   server.tool('library_remove', 'Delete an item from the library.', { name: z.string() }, guard(async ({ name }) => { removeFromLibrary(name); return text({ removed: name }); }));
 
   server.tool('deck_undo', 'Roll back the most recent change: a deck_apply, or a set of edits made to the files directly.', {}, guard(async () => text(undo(dir))));
@@ -175,14 +193,16 @@ Ops (each object has "op"): setText{slide,id,text} setAttr{slide,id,name,value} 
       action: z.string().optional().describe('Film a click action from score.actions'),
       columns: z.number().optional().describe('Frames per row, default 4. 2 makes them twice as large'),
       region: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).optional().describe('Part of the 1920x1080 stage to film; slide_render gives the boxes'),
+      loop: z.boolean().optional().describe('Film the resting loop after the build, what moves while the presenter talks: one cycle of cue loops, or the whole window of a scene'),
     },
-    guard(async ({ slide, step, frames, spanMs, spot, columns, region, action }) => {
-      const png = await r.filmstrip(await r.slideIndex(slide), step, frames, spanMs, spot, { columns, region, action });
+    guard(async ({ slide, step, frames, spanMs, spot, columns, region, action, loop }) => {
+      const png = await r.filmstrip(await r.slideIndex(slide), step, frames, spanMs, spot, { columns, region, action, loop });
       return { content: [{ type: 'image' as const, data: png.toString('base64'), mimeType: 'image/png' }] };
     }));
 
-  server.tool('deck_check', 'All diagnostics for the deck, static and rendered, with repeats grouped. Also saves what the deck defined to the library, however it was written, and under library says what else is worth keeping.', {}, guard(async () => {
-    const found = groupDiagnostics(await r.checkAll()), savedNow = keep();
+  server.tool('deck_check', 'All diagnostics for the deck, static and rendered, with repeats grouped. Times any scenes first. Also saves what the deck defined to the library, however it was written, and under library says what else is worth keeping.', {}, guard(async () => {
+    const scenes = await measure();
+    const found = { ...groupDiagnostics(await r.checkAll()), ...(scenes ? { scenes } : {}) }, savedNow = keep();
     const up = upgradeDeck(dir, { dryRun: true });
     return text({ ...found, library: { savedNow, ...reuseReport(dir) }, ...(up.upToDate ? {} : { upgrade: { from: up.from, to: DECK_FORMAT, changes: up.changes, manual: up.manual, next: 'deck_upgrade writes the changes. It does not rewrite slides: what is under manual is for you.' } }) });
   }));
@@ -221,9 +241,11 @@ Ops (each object has "op"): setText{slide,id,text} setAttr{slide,id,name,value} 
         const { diagnostics, ...done } = await exportHtml(dir, p), { errors, warnings } = groupDiagnostics(diagnostics);
         return text({ ...done, errors, warnings, ...(errors + warnings ? { next: 'deck_check lists them.' } : {}) });
       }
-      if (format === 'pptx') return text(await exportPptx(dir, p, perStep));
-      if (format === 'pdf') return text(await exportPdf(dir, p, perStep));
-      return text(await exportPng(dir, p, perStep));
+      // A picture of a slide is its finished state: say so, so nobody presents from one expecting motion.
+      const still = { note: perStep ? 'One page per step. Motion plays only in the HTML export.' : 'Each slide as it finally looks: animation plays only in the HTML export. perStep gives a page per step, for a handout.' };
+      if (format === 'pptx') return text({ ...(await exportPptx(dir, p, perStep)), ...still });
+      if (format === 'pdf') return text({ ...(await exportPdf(dir, p, perStep)), ...still });
+      return text({ ...(await exportPng(dir, p, perStep)), ...still });
     }));
 
   await server.connect(new StdioServerTransport());

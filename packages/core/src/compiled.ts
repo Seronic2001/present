@@ -11,7 +11,10 @@ export interface Track {
   c?: string;                // where the cue lives in the score, e.g. steps.1.cues.0
 }
 export interface Loop { every: number; after: number; len: number; tracks: Track[]; }
-export interface Phase { name: string; tracks: Track[]; loops: Loop[]; end: number; }
+/** auto: in step mode, go on by itself this many ms after the build ends. */
+export interface Phase { name: string; tracks: Track[]; loops: Loop[]; end: number; auto?: number; }
+/** A scene's timing, measured by replaying it in a browser. builds: when each step's build ends; rests: when its loops stop. */
+export interface SceneTiming { durs: number[]; rests: (number | null)[]; builds: number[]; names: string[]; }
 export interface Spot { id: string; n: number; tracks: Track[]; end: number; }
 /** Cues a click plays. alt: a choice other than the first in its group, so not part of the finished drawing. */
 export interface Action { id: string; tracks: Track[]; end: number; toggle?: boolean; group?: string; alt?: boolean; }
@@ -25,6 +28,9 @@ export interface CompiledSlide {
   parent?: string;           // a deep dive: the slide it hangs under
   depth?: number;            // 0 is the main path
   align?: 'top';             // pinned to the top, rather than centred
+  mode?: 'auto' | 'steps';   // this slide's own, over the deck's
+  scale?: number;            // the whole slide's content, larger or smaller
+  scene?: { name: string; n: number; measured: boolean };   // n: the root the scene owns
 }
 export interface CompiledDeck {
   title: string;

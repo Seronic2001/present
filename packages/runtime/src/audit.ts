@@ -1,4 +1,5 @@
 // Rendered checks. Runs in the page on a settled slide and reports what a person would notice.
+import { contentRect } from './tracks.ts';
 export interface Issue { code: string; severity: 'error' | 'warning'; id?: string; message: string; fix: string; }
 export interface Box { id: string; x: number; y: number; w: number; h: number; }
 
@@ -142,7 +143,7 @@ export function audit(root: HTMLElement, stageScale: number): { issues: Issue[];
   }
   const boxes: Box[] = [...root.querySelectorAll('[id]')]
     .filter(e => !e.closest('defs'))
-    .map(e => ({ id: e.id, ...toStage(e.getBoundingClientRect()) }))
+    .map(e => ({ id: e.id, ...toStage(contentRect(e)) }))
     .map(b => ({ ...b, x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h) }));
   return { issues, boxes };
 }

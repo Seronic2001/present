@@ -5,7 +5,7 @@ import { collectBoxes, expand, MACROS, toHtml } from './macros.ts';
 import { classes, parseSlide, textOf, walk, type XNode } from './parse.ts';
 import { PATTERNS } from './patterns.ts';
 import { PHRASES, type Phrase } from './phrases.ts';
-import { compileScore } from './score.ts';
+import { compileScore, type SceneInfo } from './score.ts';
 
 const HTML_TAGS = 'div span p h1 h2 h3 h4 em strong b i u s small br hr ul ol li a img table thead tbody tr td th code pre blockquote figure figcaption sub sup kbd mark'.split(' ');
 const SVG_TAGS = 'svg g defs symbol use path rect circle ellipse line polyline polygon text tspan marker linearGradient radialGradient stop filter feDropShadow feGaussianBlur feOffset feMerge feMergeNode clipPath mask pattern title desc image foreignObject'.split(' ');
@@ -29,7 +29,7 @@ function promoteStyle(e: XNode, a: Record<string, string>) {
 }
 const holdsText = (n: XNode): boolean => n.name === 'text' || (n.children ?? []).some(holdsText);
 
-export interface CompileOpts { sourceMap?: boolean; id: string; images?: (src: string) => string | null; read?: (path: string) => string | null; align?: string; stepLimit?: number; macros?: Record<string, any>; phrases?: Record<string, Phrase>; }
+export interface CompileOpts { sourceMap?: boolean; id: string; images?: (src: string) => string | null; read?: (path: string) => string | null; align?: string; stepLimit?: number; macros?: Record<string, any>; phrases?: Record<string, Phrase>; scene?: (name: string) => SceneInfo; }
 
 const wrapWords = (n: XNode) => {
   const out: XNode[] = [];
@@ -59,7 +59,7 @@ export function compileSlide(src: string, o: CompileOpts): { slide: CompiledSlid
   const p = parseSlide(src);
   const add = (code: string, severity: 'error' | 'warning', message: string, fix: string, id?: string) => diags.push({ code, severity, slide, id, message, fix });
 
-  if (p.frontError) add('bad-frontmatter', 'error', p.frontError.split('\n')[0], 'Fix the YAML frontmatter');
+  if (p.frontError) add('bad-frontmatter', 'error', p.frontError.split('\n')[0], /mapping|: /i.test(p.frontError) ? 'A value with ": " in it, like a brief, needs quotes: brief: "..."' : 'Fix the YAML frontmatter');
   if (!p.front.title) add('missing-title', 'warning', 'Slide has no title', 'Add title to the frontmatter');
   if (!p.front.brief) add('missing-brief', 'warning', 'Slide has no brief', 'Add brief: what the slide argues and how it builds');
 
@@ -118,8 +118,6 @@ export function compileSlide(src: string, o: CompileOpts): { slide: CompiledSlid
   });
   relink(root);
 
-  const words = textOf(root).trim().split(/\s+/).filter(Boolean).length;
-  if (words > 160) add('too-many-words', 'warning', `Slide has ${words} words`, 'Cut text or split the slide');
 
   // Definitions are for the few things a room cannot work out. A slide full of them is a glossary, not a slide.
   const terms = new Map<string, number>();
@@ -134,7 +132,13 @@ export function compileSlide(src: string, o: CompileOpts): { slide: CompiledSlid
   if (twice.length) add('term-repeated', 'warning', `${twice.map(k => `"${k}"`).join(', ')} defined more than once`, 'Define a thing once, where it is first used');
   if (terms.size > 3) add('too-many-terms', 'warning', `Slide defines ${terms.size} terms`, 'Keep the 3 the audience most needs. Underline everywhere reads as noise');
 
-  const { phases, spots, actions } = compileScore({ root, score: p.front.score, slide, diags, stepLimit: o.stepLimit ?? 10000, phrases: { ...o.phrases, ...p.front.score?.phrases } });
+  const { phases, spots, actions, scene, swaps } = compileScore({ root, score: p.front.score, slide, diags, stepLimit: o.stepLimit ?? 10000, phrases: { ...o.phrases, ...p.front.score?.phrases }, scene: o.scene });
+  // Words the room reads at once: of the panels of a swap, only one shows at a time.
+  const count = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
+  const swapped = new Set(swaps);
+  const visible = (n: XNode): number => (n.type === 'text' ? count(n.data ?? '') : swapped.has(n) ? Math.max(0, ...(n.children ?? []).map(visible)) : (n.children ?? []).reduce((m, c) => m + visible(c), 0));
+  const words = visible(root);
+  if (words > 160) add('too-many-words', 'warning', `Slide has ${words} words${swaps.length ? ' showing at once' : ''}`, 'Cut text or split the slide');
   const restRaw = p.front.score?.rest;
   const clicked = new Set<string>();
   walk(root, e => { const k = e.attribs?.['data-act']; if (k) clicked.add(k); });
@@ -142,29 +146,71 @@ export function compileSlide(src: string, o: CompileOpts): { slide: CompiledSlid
   for (const x of actions) if (!clicked.has(x.id)) add('unused-action', 'warning', `Nothing has act="${x.id}"`, 'Add act to the part that should be clicked, or remove the action');
   const align = p.front.align ?? o.align;
   if (align != null && align !== 'top' && align !== 'center') add('bad-align', 'warning', `align is "${align}"`, 'Use top or center');
+  const mode = p.front.mode;
+  if (mode != null && mode !== 'auto' && mode !== 'steps') add('bad-mode', 'warning', `mode is "${mode}"`, 'Use auto (steps play by themselves) or steps (each waits for a click)');
+  const scale = p.front.scale != null ? Number(p.front.scale) : undefined;
+  if (scale != null && !(scale >= .5 && scale <= 2)) add('bad-scale', 'warning', `scale is "${p.front.scale}"`, 'Use a number from 0.5 to 2: 1.15 makes everything on the slide 15% larger');
   const compiled: CompiledSlide = {
     id: slide, title: String(p.front.title ?? ''), brief: String(p.front.brief ?? ''), notes: String(p.front.notes ?? ''),
     html: toHtml(root), phases, spots, rest: restRaw === 'always' ? 'always' : Number(restRaw ?? 6000),
     ...(align === 'top' ? { align: 'top' as const } : {}),
     ...(actions.length ? { actions } : {}),
+    ...(mode === 'auto' || mode === 'steps' ? { mode } : {}),
+    ...(scale && scale !== 1 && scale >= .5 && scale <= 2 ? { scale } : {}),
+    ...(scene ? { scene } : {}),
   };
   return { slide: compiled, diagnostics: diags };
 }
 
-export function catalog(cues: Record<string, { d: number; e: string; doc: string }>, phrases: Record<string, Phrase> = {}, library: any[] = []) {
+/** Scenes: the API, with one small example per helper, as the catalog shows it. */
+export const SCENES = {
+  when: 'Try cues and phrases first. Write a scene for choreography they cannot express: a spark riding the tip of a stroke as it draws, a dot that stops at a gate or branches, several loops at different rates, anything that reacts to what came before. A scene is code, like a track, and runs on this machine.',
+  how: 'A scene is a file, scenes/<name>.ts, default-exporting (ctx) => { ... }. The slide says score: { scene: <name> }, and the scene owns the slide\'s first <svg> (or score.root: an id). Draw the finished picture in the markup as always; the scene hides parts and brings them in. The body runs as the slide appears (the intro); each ctx.step(name, fn) is one click. Loops started with every or frame run while the presenter talks, then stop after the slide\'s rest window (6s by default) and ctx.onRest runs to settle the drawing. Each step lasts as long as it needs: Present replays the scene in a browser and measures it, on deck_apply and deck_check, so a score never needs durations. Cues in the same score can still move parts outside the root. Nothing reads a real clock, so slide_render at any step and t, and slide_filmstrip with loop: true, show exactly what the room sees.',
+  example: `// scenes/handoff.ts\nexport default (ctx) => {\n  const fx = ctx.layer();\n  ctx.hide(ctx.$$('.part'));\n  ctx.reveal(ctx.$$('.part'), { dur: 420, delay: 80 });\n  ctx.step('send', () => {\n    const link = ctx.$('#l1'), to = ctx.$('#b');\n    ctx.draw(link, { dur: 500, spark: true });\n    ctx.at(500, () => { const c = ctx.center(to); ctx.ripple(fx, c.x, c.y); ctx.hot(to, 900); });\n    ctx.every(1250, () => { const d = ctx.dot(fx, 0, 0, 4); ctx.travel(d, link, { dur: 900, done: () => d.remove() }); });\n  });\n};\n\n# the slide\nscore:\n  scene: handoff`,
+  ctx: {
+    'root, svg': 'The element the scene owns, and the <svg> in it. ctx.$(sel) and ctx.$$(sel) look inside root.',
+    'step(name, fn)': "One click. ctx.step('verify', () => { ctx.pop(ctx.$('#check')); })",
+    'at(ms, fn)': 'Run later in this step: ctx.at(400, () => ctx.hot(box, 900))',
+    'every(ms, fn, first?)': 'A loop while the presenter talks; fn gets the count. ctx.every(1250, n => ctx.ripple(fx, x, y)). Stops at rest.',
+    'frame(fn)': 'Every frame until rest: ctx.frame((t, dt) => needle.setAttribute("transform", `rotate(${t * 90} 400 300)`)). Returns a stop function.',
+    'onRest(fn)': 'When loops stop: put anything a loop moved back to the drawing. ctx.onRest(() => cursor.remove())',
+    'tween(dur, fn, o?)': 'The primitive: fn(p) with p from 0 to 1. ctx.tween(600, p => bar.setAttribute("width", 300 * p), { delay: 100, ease: "back", done })',
+    'hide(els) / reveal(els, o?)': 'reveal fades in rising y (14px): ctx.hide(ctx.$$(".row")); ctx.$$(".row").forEach((r, i) => ctx.reveal(r, { delay: i * 80 }))',
+    'pop(els, o?)': 'Scales in from 0.64 with a back ease: ctx.pop(ctx.$("#badge"), { delay: 300 })',
+    'draw(els, o?)': 'A stroke draws itself; spark: true rides a dot on its tip. ctx.draw(ctx.$("#route"), { dur: 900, spark: true })',
+    'type(el, o?)': 'Types text out, keeping its tspans and colours: ctx.type(ctx.$("#cmd"), { dur: 700 })',
+    'count(el, o?)': 'The first number in el counts up: ctx.count(ctx.$("#cost"), { from: 0, dur: 1100 })',
+    'hot(el, ms?, cls?)': 'Adds class hot for a while: ctx.hot(ctx.$("#gate"), 800)',
+    'layer(parent?)': 'A group for things the scene adds (dots, rings), on top of the drawing: const fx = ctx.layer()',
+    'dot(layer, x, y, r?, fill?)': 'A circle: const d = ctx.dot(fx, 100, 200, 4, "var(--ok)")',
+    'travel(el, path, o?)': 'Moves a dot (or group) along a path; from/to are fractions: ctx.travel(d, ctx.$("#l1"), { dur: 800, to: .6, done: () => d.remove() })',
+    'along(path, p)': 'The point at a fraction of a path: const { x, y } = ctx.along(path, .5)',
+    'center(el)': 'The middle of any element, in the svg\'s coordinates: const c = ctx.center(ctx.$("#b"))',
+    'ripple(layer, x, y, o?)': 'An expanding ring: ctx.ripple(fx, c.x, c.y, { r1: 30, color: "var(--danger)" })',
+    'el(tag, attrs, parent?)': 'Makes an SVG element: ctx.el("line", { x1: 0, y1: 0, x2: 10, y2: 0 }, fx)',
+    'rand(seed?)': 'A seeded random function, so every replay is the same: const r = ctx.rand(7)',
+    'ease': 'The easing functions: lin, out, inOut, back, sine.',
+    resting: 'True after the loops stopped.',
+  },
+};
+
+export function catalog(cues: Record<string, { d: number; e: string; doc: string }>, phrases: Record<string, Phrase> = {}, library: any[] = [], libraryPath?: string) {
   return {
     writingMacros: `A macro is a file, macros/<Name>.ts in the deck, and the file name is the tag: macros/Triangle.ts gives <Triangle>. It default-exports { doc, props, example, svg?, html? }. Give svg to use it in a Diagram, html to use it outside one, or both. Each is (a, c) => markup: a holds the attributes as strings, and c has slide, diagram and diags. Put a <slot/> where the tag's children go. id, class and style are not applied for you: write them into the markup. List every attribute in props, or it is reported as ignored. Type annotations work; enums do not, and it needs no imports. It takes effect on the next tool call and goes to the library by itself. Macros are code, and run on this machine.\n\n// macros/Triangle.ts\nexport default {\n  doc: 'Three joined nodes.', props: 'id, x, y, r?',\n  example: '<Triangle id="t" x="200" y="200" />',\n  svg: a => {\n    const x = +a.x, y = +a.y, r = +(a.r ?? 60);\n    return \`<g id="\${a.id}" class="part"><path class="seg conn" d="M \${x} \${y - r} L \${x + r} \${y + r} L \${x - r} \${y + r} Z"/><slot/></g>\`;\n  },\n};`,
     interaction: 'act="name" on a Box, Card, Chip, Text or raw element makes it a click target that plays the cues under score.actions.name, in any order and at any step: score:\n  actions:\n    show-a:\n      cues:\n        - fade: a\n    pick-b:\n      group: choice\n      toggle: true\n      cues:\n        - tint: v\n          from: data-2\nA click plays an action once. toggle lets a second click reverse it, and group makes actions pick-one, resetting the others. Everything starts unplayed in a show, while checks, PDFs and exports see the finished drawing with actions played, except the later choices of a group. An action needs parts of its own, not ones the steps move. slide_render takes actions to see any state, and slide_filmstrip takes action to judge one. goto="slide-id" makes a part a click target that jumps there. Point the choices at deep dives and the room can pick a branch: Next at the end of a deep dive returns to the slide they chose from. For anything more, like a poll, use Embed.',
     layout: 'Slides are centred vertically, so a header moves with the height of what is under it. Set align: top in deck.yaml to pin every header, and align: center in the frontmatter of a slide that should stay centred, such as a title.',
     deepDives: 'A deck is a tree. The main path is the talk; a slide can have deep dives under it, for when the room wants more. The presenter opens one with Down, and Next at its end returns to the parent. Put the argument on the main path and the detail underneath: addSlide with under, or moveSlide with under. Timing counts the main path only.',
-    library: library.map(i => ({ name: i.name, doc: i.doc, useWhen: i.useWhen, slide: i.slide, uses: [...i.macros, ...i.tracks, ...i.phrases], code: i.code, from: i.from })),
-    howToCompose: 'Look in library first: it holds components saved from earlier projects, and library_add copies one into this deck. Otherwise start from a pattern (addSlide with pattern, or pattern_read to adapt one). Draw with macros; every figure (Milestones, Plot, Timing, Hub, Terrain, Neck) has the same anatomy: .part holding .seg, .node and .body, also reachable as <id>-1, <id>-2. Move things with phrases before single cues: `- use: arrive` with `on: .part`. In steps, `- over: .part` and `use: arrive` makes one step per match. When a beat repeats, name it under phrases: in deck.yaml. When a drawing repeats, add it to macros/. Anything worth keeping goes to the library with library_save, without asking: see the guide.',
+    library: library.map(i => ({ name: i.name, doc: i.doc, useWhen: i.useWhen, slide: i.slide, uses: [...i.macros, ...i.tracks, ...(i.scenes ?? []), ...i.phrases], code: i.code, from: i.from })),
+    ...(libraryPath ? { libraryPath: `${libraryPath} (on the machine running the present server; library_search finds an item by what it is for)` } : {}),
+    howToCompose: 'Look in library first: it holds components saved from earlier projects, and library_add copies one into this deck. Otherwise start from a pattern (addSlide with pattern, or pattern_read to adapt one). Draw with macros; every figure (Milestones, Plot, Timing, Hub, Terrain, Neck) has the same anatomy: .part holding .seg, .node and .body, also reachable as <id>-1, <id>-2. Move things with phrases before single cues: `- use: arrive` with `on: .part`. A Diagram of Boxes and Links can enter with one cue, `- build: <diagram id>`. Panels that replace each other go in a <Swap>, changed with `- swap: <id>` and `to:`. Code goes in <Code>, typed in with `- use: type-code`. For choreography cues cannot express, write a scene: see scenes. In steps, `- over: .part` and `use: arrive` makes one step per match. When a beat repeats, name it under phrases: in deck.yaml. When a drawing repeats, add it to macros/. Anything worth keeping goes to the library with library_save, without asking: see the guide.',
     patterns: Object.entries(PATTERNS).map(([name, p]) => ({ name, doc: p.doc, useWhen: p.useWhen })),
     phrases: Object.entries({ ...PHRASES, ...phrases }).map(([name, p]) => ({ name, doc: p.doc, params: p.params ?? '', example: `- use: ${name}${p.params ? p.params.split(', ').map(k => `\n  ${k}: an-id`).join('') : '\n  on: .part'}` })),
     macros: Object.entries(MACROS).map(([name, m]) => ({ name, doc: m.doc, props: m.props, example: m.example, where: [m.html && 'html', m.svg && 'diagram'].filter(Boolean) })),
     cues: Object.entries(cues).filter(([k]) => k !== 'word').map(([name, c]) => ({ name, doc: c.doc, defaultDur: c.d, defaultEase: c.e })),
-    cueOptions: 'Every cue takes at (ms), dur, stagger, ease (lin|out|inOut|back|sine). A step or cue group takes each: selector, then cues use $ for the item and "$ .x" for parts inside it. Selectors are an id, .class, or a list. optional: true lets a target be absent, which is what makes a phrase fit many drawings.',
-    tokens: ['ink', 'muted', 'faint', 'rule', 'canvas', 'accent', 'accent-deep', 'tint', 'ok', 'ok-muted', 'warn', 'warn-muted', 'danger', 'danger-muted', 'struck', 'data-1', 'data-2', 'data-3', 'data-4', 'data-5', 'data-6'],
+    scenes: SCENES,
+    steps: 'A step is { name, cues, loop?, auto? }. auto: 1200 makes it go on by itself 1200ms after its build ends, even in step mode. A slide can set mode: steps (each step waits for a click) or mode: auto in its frontmatter, over the mode of the deck, and scale: 1.15 to make everything on it larger.',
+    cueOptions: 'Every cue takes at (ms), dur, stagger, ease (lin|out|inOut|back|sine). chain: true runs its targets one after another instead of together, with gap ms between. A step or cue group takes each: selector, then cues use $ for the item and "$ .x" for parts inside it. Selectors are an id, .class, or a list. optional: true lets a target be absent, which is what makes a phrase fit many drawings.',
+    tokens: ['ink', 'muted', 'faint', 'rule', 'canvas', 'accent', 'accent-deep', 'accent-on-tint', 'tint', 'ok', 'ok-muted', 'warn', 'warn-muted', 'danger', 'danger-muted', 'struck', 'data-1', 'data-2', 'data-3', 'data-4', 'data-5', 'data-6'],
     spot: 'Add spot="" to any part with an id, or to a Box or Card, and the presenter can zoom into it. Motion that plays when zoomed goes under score.spots.<id>.cues.',
     hot: 'hot works on any Box, Card or Chip, by id or class.',
     tones: 'One accent, for the thing the deck argues for. ok = verified, warn = partial, danger = broken, grey = ambient. Never decoration.',

@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, w
 import { dirname, join, resolve } from 'node:path';
 import { parseDocument } from 'yaml';
 import { compileSlide } from './compile.ts';
-import { annPath, compileDeck, nestSlides, readAnnotations, readDeck, revisionOf, slidePath, type Annotation } from './deck.ts';
+import { annPath, compileDeck, nestSlides, readAnnotations, readDeck, revisionOf, sceneFiles, slidePath, type Annotation } from './deck.ts';
 import type { Diagnostic } from './diagnostics.ts';
 import { PATTERNS } from './patterns.ts';
 import { findById, parseSlide, splitFront, walk, type XNode } from './parse.ts';
@@ -18,6 +18,8 @@ export type Op =
   | { op: 'removeNode'; slide: string; id: string }
   | { op: 'moveNode'; slide: string; id: string; parent?: string; after?: string; before?: string }
   | { op: 'setScore'; slide: string; score: any }
+  | { op: 'setStep'; slide: string; step: number; cues?: any[]; name?: string; loop?: any; auto?: number | boolean | null }
+  | { op: 'appendCue'; slide: string; step: number; cue: any }
   | { op: 'setCueTiming'; slide: string; cue: string; at?: number; dur?: number }
   | { op: 'setNotes'; slide: string; notes: string }
   | { op: 'setBrief'; slide: string; brief: string }
@@ -93,12 +95,45 @@ function setFront(src: string, key: string, value: any): string {
   return `---\n${doc.toString({ lineWidth: 0 }).trimEnd()}\n---\n${src.slice(bodyStart)}`;
 }
 
+/** One step of a score, so a change to its motion need not resend the slide. Step 0 is the intro. */
+function patchStep(src: string, op: Extract<Op, { op: 'setStep' | 'appendCue' }>): string {
+  const { yaml, bodyStart } = splitFront(src);
+  const doc = parseDocument(yaml);
+  const score: any = doc.get('score', true) ? (doc.toJS() as any).score ?? {} : {};
+  if (!Number.isInteger(op.step) || op.step < 0) throw new Error(`step is 0 for the intro, or 1 and up for the steps; got ${op.step}`);
+  const steps: any[] = score.steps ?? [];
+  if (op.step > steps.length + 1 || (op.op === 'appendCue' && op.step > steps.length)) throw new Error(`This slide has ${steps.length} steps; step ${op.step} would leave a gap`);
+  // The intro may be written as a bare list. A step is { name, cues, loop?, auto? }.
+  const read = (v: any) => (Array.isArray(v) ? { cues: v } : { ...(v ?? {}) });
+  const cur = op.step === 0 ? read(score.intro) : read(steps[op.step - 1] ?? { name: (op.op === 'setStep' && op.name) || `step ${op.step}` });
+  if (op.op === 'appendCue') cur.cues = [...(cur.cues ?? []), op.cue];
+  else {
+    if (op.cues !== undefined) cur.cues = op.cues;
+    if (op.name !== undefined) cur.name = op.name;
+    if (op.loop !== undefined) { if (op.loop == null) delete cur.loop; else cur.loop = op.loop; }
+    if (op.auto !== undefined) { if (op.auto == null) delete cur.auto; else cur.auto = op.auto; }
+  }
+  if (op.step === 0) doc.setIn(['score', 'intro'], doc.createNode(Object.keys(cur).length === 1 && cur.cues ? cur.cues : cur));
+  else if (op.step <= steps.length) doc.setIn(['score', 'steps', op.step - 1], doc.createNode(cur));
+  else doc.setIn(['score', 'steps'], doc.createNode([...steps, cur]));
+  return `---\n${doc.toString({ lineWidth: 0 }).trimEnd()}\n---\n${src.slice(bodyStart)}`;
+}
+
+/** Prose with ": " in it breaks YAML unless quoted, and a brief is prose. Quote what would not parse. */
+export function quoteProse(src: string): string {
+  const { yaml, bodyStart } = splitFront(src);
+  if (!yaml || !parseDocument(yaml).errors.length) return src;
+  const fixed = yaml.replace(/^(title|brief|notes|aside):[ \t]+(?!["'|>])(.*\S)[ \t]*$/gm, (_, k, v) => `${k}: ${JSON.stringify(v)}`);
+  return parseDocument(fixed).errors.length ? src : `---\n${fixed}\n---\n${src.slice(bodyStart)}`;
+}
+
 export function patchSlide(src: string, op: Op): string {
   if (op.op === 'setScore') return setFront(src, 'score', op.score);
+  if (op.op === 'setStep' || op.op === 'appendCue') return patchStep(src, op);
   if (op.op === 'setCueTiming') {
     const { yaml, bodyStart } = splitFront(src);
     const doc = parseDocument(yaml);
-    const path = ['score', ...op.cue.split('.').map(x => (/^d+$/.test(x) ? +x : x))];
+    const path = ['score', ...op.cue.split('.').map(x => (/^\d+$/.test(x) ? +x : x))];
     if (!doc.hasIn(path)) throw new Error(`No cue at ${op.cue}`);
     if (op.at != null) doc.setIn([...path, 'at'], op.at);
     if (op.dur != null) doc.setIn([...path, 'dur'], op.dur);
@@ -190,7 +225,7 @@ export function applyOps(dir: string, ops: Op[], baseRevision: string): ApplyRes
         if (order.includes(op.id)) throw new Error(`Slide ${op.id} already exists`);
         const start = op.pattern == null ? op.source : PATTERNS[op.pattern]?.source;
         if (start == null) throw new Error(op.pattern == null ? 'addSlide needs source or pattern' : `No pattern "${op.pattern}". Patterns: ${Object.keys(PATTERNS).join(', ')}`);
-        files.set(op.id, start);
+        files.set(op.id, quoteProse(start));
         if (op.under != null && !order.includes(op.under)) throw new Error(`No slide "${op.under}" to go under`);
         if (op.under != null) parents[op.id] = op.under;
         const at = op.after ? order.indexOf(op.after) + 1 : order.length;
@@ -218,12 +253,17 @@ export function applyOps(dir: string, ops: Op[], baseRevision: string): ApplyRes
         delete parents[op.id];
         orderChanged = true;
       } else if (op.op === 'reorderSlides') {
-        if ([...op.order].sort().join() !== [...order].sort().join()) throw new Error('reorderSlides must list every slide exactly once');
-        order = [...op.order];
+        // Any subset: the slides named take each other's places, in the order given. Listing the main
+        // path reorders the talk, and each deep dive stays under its slide.
+        const unknown = op.order.filter(id => !order.includes(id)), twice = op.order.filter((id, k) => op.order.indexOf(id) !== k);
+        if (unknown.length) throw new Error(`reorderSlides: no slide ${unknown.join(', ')}`);
+        if (twice.length) throw new Error(`reorderSlides lists ${[...new Set(twice)].join(', ')} more than once`);
+        const named = new Set(op.order), next = [...op.order];
+        order = order.map(id => (named.has(id) ? next.shift()! : id));
         orderChanged = true;
       } else if (op.op === 'replaceSlide') {
         read(op.id);
-        files.set(op.id, op.source);
+        files.set(op.id, quoteProse(op.source));
       } else {
         files.set(op.slide, patchSlide(read(op.slide), op));
       }
@@ -231,7 +271,8 @@ export function applyOps(dir: string, ops: Op[], baseRevision: string): ApplyRes
   } catch (e: any) { return refuse(e.message); }
 
   const diagnostics: Diagnostic[] = [];
-  for (const [id, src] of files) if (src != null) diagnostics.push(...compileSlide(src, { id, images: () => 'data:,', stepLimit: meta.stepLimit, phrases: meta.phrases }).diagnostics);
+  const scenes = sceneFiles(root);
+  for (const [id, src] of files) if (src != null) diagnostics.push(...compileSlide(src, { id, images: () => 'data:,', stepLimit: meta.stepLimit, phrases: meta.phrases, scene: name => ({ known: scenes.has(name) }) }).diagnostics);
   if (diagnostics.some(d => d.severity === 'error')) return { ...refuse('Batch rejected: it would leave errors in the deck. Nothing was written.', diagnostics) };
 
   // Journal the old state, then write each file through a temp name.

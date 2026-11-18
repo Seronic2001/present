@@ -1,6 +1,7 @@
 // Each cue binds to an apply(p). Contract: apply depends only on p, so any frame can be
 // reproduced. p=1 restores the finished drawing; signals are also identity at p=0.
 import type { Track } from '../../core/src/compiled.ts';
+import { numberNode, simFor } from './scene.ts';
 
 export type Apply = (p: number) => void;
 export interface BindApi {
@@ -28,12 +29,31 @@ const svgEl = (tag: string, attrs: Record<string, any>, parent: Element) => {
 };
 const endOpacity = (el: Element) => { const v = parseFloat(getComputedStyle(el).opacity); return isNaN(v) ? 1 : v; };
 const setOp = (el: Element, end: number, p: number) => { css(el).opacity = p >= 1 ? base(el, 'opacity') : (end * Math.max(0, p)).toFixed(3); };
+/** The screen box of what an element shows. A foreignObject's frame can be far wider than the text in it
+ *  (a TextBlock with no w gets room to grow), so inside one, what it holds is measured instead. */
+export function contentRect(el: Element): DOMRect {
+  if (el.tagName !== 'foreignObject' && !el.querySelector('foreignObject')) return el.getBoundingClientRect();
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const k of el.children) {
+    const r = el.tagName === 'foreignObject' ? inkRect(k) : contentRect(k);
+    if (!r.width && !r.height) continue;
+    x0 = Math.min(x0, r.left); y0 = Math.min(y0, r.top); x1 = Math.max(x1, r.right); y1 = Math.max(y1, r.bottom);
+  }
+  return x0 === Infinity ? el.getBoundingClientRect() : new DOMRect(x0, y0, x1 - x0, y1 - y0);
+}
+const inkRect = (el: Element) => { const r = document.createRange(); r.selectNodeContents(el); const b = r.getBoundingClientRect(); return b.width ? b : el.getBoundingClientRect(); };
+
 // Scale about the element's own box. SVG composes into the transform attribute, centred in the
 // parent's space, because CSS scale wraps an attribute transform and misplaces <use>. p=1 restores it.
 const scaler = (el: Element, fx = .5, fy = .5) => {
   if (el instanceof SVGGraphicsElement && !(el instanceof SVGSVGElement)) {
     const orig = el.getAttribute('transform'), b = el.getBBox(), m = el.transform.baseVal.consolidate()?.matrix;
-    const pt = new DOMPoint(b.x + b.width * fx, b.y + b.height * fy).matrixTransform(m ?? new DOMMatrix());
+    let pt = new DOMPoint(b.x + b.width * fx, b.y + b.height * fy).matrixTransform(m ?? new DOMMatrix());
+    const host = el.parentNode as SVGGraphicsElement | null;
+    if (el.querySelector('foreignObject') && host?.getScreenCTM) {   // centred on its text, not on the frame around it
+      const r = contentRect(el), inv = host.getScreenCTM()?.inverse();
+      if (inv && r.width) pt = new DOMPoint(r.left + r.width * fx, r.top + r.height * fy).matrixTransform(inv);
+    }
     return (sx: number, sy = sx) => {
       if (sx === 1 && sy === 1) { if (orig == null) el.removeAttribute('transform'); else el.setAttribute('transform', orig); return; }
       el.setAttribute('transform', `translate(${pt.x.toFixed(2)} ${pt.y.toFixed(2)}) scale(${sx.toFixed(3)} ${sy.toFixed(3)}) translate(${(-pt.x).toFixed(2)} ${(-pt.y).toFixed(2)}) ${orig ?? ''}`);
@@ -117,20 +137,29 @@ const FACTORIES: Record<string, TrackFactory> = {
       g.style.visibility = p > 0 ? '' : 'hidden';
     };
   },
+  // Text nodes are cut, not the element's text, so tspans (coloured code, an <em>) survive. p=1 restores each.
   type: el => {
-    const fin = el.textContent ?? '';
-    return p => { el.textContent = p >= 1 ? fin : fin.slice(0, Math.round(fin.length * p)); };
+    const nodes: Text[] = [];
+    const walk = (n: Node) => { for (const k of n.childNodes) { if (k.nodeType === 3) nodes.push(k as Text); else walk(k); } };
+    walk(el);
+    const fin = nodes.map(n => n.data), total = fin.reduce((s, x) => s + x.length, 0);
+    return p => {
+      let left = p >= 1 ? Infinity : Math.round(total * Math.max(0, p));
+      nodes.forEach((n, i) => { const k = Math.min(left, fin[i].length); n.data = fin[i].slice(0, k); left -= k; });
+    };
   },
+  // The first number anywhere inside counts, and every other character and tspan stays: "237 s", "14×".
   count: (el, a) => {
-    const fin = el.textContent ?? '', m = fin.match(/[\d,]*\.?\d+/);
-    if (!m) return () => {};
+    const hit = numberNode(el);
+    if (!hit) return () => {};
+    const { text, fin, m } = hit;
     const num = parseFloat(m[0].replace(/,/g, '')), dec = (m[0].split('.')[1] ?? '').length;
     const commas = m[0].includes(','), from = a.from ?? 0;
     return p => {
-      if (p >= 1) { el.textContent = fin; return; }
+      if (p >= 1) { text.data = fin; return; }
       const v = from + (num - from) * p;
       const s = commas ? v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }) : v.toFixed(dec);
-      el.textContent = fin.slice(0, m.index) + s + fin.slice(m.index! + m[0].length);
+      text.data = fin.slice(0, m.index) + s + fin.slice(m.index! + m[0].length);
     };
   },
   animate: (el, a) => {
@@ -208,6 +237,8 @@ const FACTORIES: Record<string, TrackFactory> = {
       ring.setAttribute('opacity', (1 - p).toFixed(3));
     };
   },
+  // A scene owns its root: each phase's track plays that step of the replay. The engine made the Sim and timed it.
+  scene: (el, a) => { const sim = simFor(el, a.scene, a.window ?? 6000); return p => sim.apply(a.index, p); },
   travel: (el, a, api) => {                            // el is the path; a particle rides it
     const layer = api.fx(el), path = el as unknown as SVGGeometryElement, L = path.getTotalLength(), r = a.r ?? 3.6;
     const from = a.from ?? 0, to = a.to ?? 1, tail = a.tail ?? 0;

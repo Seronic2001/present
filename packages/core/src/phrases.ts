@@ -32,6 +32,10 @@ export const PHRASES: Record<string, Phrase> = {
     params: 'path',
     cues: [{ stream: '{path}', dur: 2600, n: 16, jitter: 8 }],
   },
+  'type-code': {
+    doc: 'A Code panel comes up, then its lines type out one after another, in colour. on: the Code id.',
+    cues: [{ fade: '$ .code-panel', dur: 320, optional: true }, { type: '$ .code-text', at: 240, chain: true, gap: 90, rate: 26 }],
+  },
   survey: {
     doc: 'A map comes up: its .ring lines fade in from the outside, then its part arrives.',
     cues: [{ fade: '.ring', dur: 420, stagger: 90 }, { use: 'arrive', on: '.part', at: 500 }],

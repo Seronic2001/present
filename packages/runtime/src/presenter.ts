@@ -26,7 +26,7 @@ const pad = (n: number) => String(n).padStart(2, '0');
 const clock = (ms: number) => `${pad(Math.floor(ms / 60000))}:${pad(Math.floor(ms / 1000) % 60)}`;
 
 /** A slide as markup. In a thumbnail embedded pages do not run; give a seed for the pane that shows the live slide. */
-export const stillSlide = (s: CompiledSlide, seed?: number) => `<section class="p-slide"${s.align ? ` data-align="${s.align}"` : ''}><div class="p-body">${seed == null ? s.html.replace(/ srcdoc="[^"]*"/g, '') : s.html.replaceAll('PRESENT_SEED', String(seed))}</div></section>`;
+export const stillSlide = (s: CompiledSlide, seed?: number) => `<section class="p-slide"${s.align ? ` data-align="${s.align}"` : ''}><div class="p-body"${s.scale ? ` style="zoom:${s.scale}"` : ''}>${seed == null ? s.html.replace(/ srcdoc="[^"]*"/g, '') : s.html.replaceAll('PRESENT_SEED', String(seed))}</div></section>`;
 
 /** A slide at the end of a step. seek() is pure, so this is the same picture the audience gets. */
 function draw(box: HTMLElement, slide: CompiledSlide, phase: number, t = slide.phases[phase].end + 1, seed?: number) {
