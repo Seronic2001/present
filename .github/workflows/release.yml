@@ -33,6 +33,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       - run: npm ci
+      # npm no longer runs install scripts it has not been told to allow, so Electron's binary,
+      # which electron-builder.yml packages from node_modules/electron/dist, is fetched here.
+      - run: node node_modules/electron/install.js
       - run: npx electron-builder ${{ matrix.flag }} --publish never
       - uses: actions/upload-artifact@v4
         with:
