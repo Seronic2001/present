@@ -4,7 +4,8 @@ export const LOOP = `# Working on this deck
 This folder is a Present deck: plain text, and the only source of truth. Use the \`present\` MCP tools.
 
 0. Plan before building. Read the material (the project's evals, data and figures, or \`references_list\`), then call \`plan_write\` with the story, and each slide's claim, visual, animation beats and evidence. Show the plan to the human and wait for their go-ahead, unless they told you to go straight on. \`plan_read\` gives the status and their comments. Keep the plan true as you work: rewrite it if the deck changes direction. Every reply ends with the folder the tools are on. If it says this is not a deck, \`deck_open\` any deck it names rather than making a second one; if there is none, \`deck_create\` makes one.
-1. \`catalog\` first, even before a deck exists. It lists every macro, cue and token, with examples, and how to write your own macro.
+1. \`catalog\` first, even before a deck exists. It lists every macro, cue and token. \`catalog\` with \`topics\` gives macro examples, scenes, and how to write your own macro.
+   Replies are kept short: \`slide_read\` leaves out long path data (edit by id, or pass \`element\` or \`full\`), and \`deck_apply\` reports warnings only for the slides it changed. \`deck_check\` has them all.
 2. \`deck_outline\` for the structure and the revision.
 3. \`references_list\` for the source material the human collected: reports, docs, data, screenshots. \`reference_read\` opens one. Take facts from these rather than inventing them.
 4. Read a slide's \`brief\` before changing it. Keep the brief true when the slide's point changes.
