@@ -18,6 +18,13 @@ export function mcpLaunch(dir: string): McpLaunch {
   };
 }
 
+/** The command saved in an agent's settings, which must still work after this process is gone. An AppImage
+ *  runs from a mount that disappears when the app closes, so it saves the AppImage file itself with `--mcp`,
+ *  which the desktop app turns into the server. */
+export function mcpSaved(dir: string, env: NodeJS.ProcessEnv = process.env): McpLaunch {
+  return env.APPIMAGE ? { command: env.APPIMAGE, args: ['--mcp', resolve(dir)] } : mcpLaunch(dir);
+}
+
 function writeClaude(root: string, launch: McpLaunch) {
   const file = join(root, '.mcp.json');
   // An unreadable config is refused rather than replaced: it may hold the human's other servers.
@@ -32,7 +39,7 @@ export function codexArgs(launch: McpLaunch) {
   return ['mcp', 'add', ...Object.entries(launch.env ?? {}).flatMap(([k, v]) => ['--env', `${k}=${v}`]), 'present', '--', launch.command, launch.args[0]];
 }
 export function connectCodex() {
-  return spawn.sync('codex', codexArgs(mcpLaunch('.')), { stdio: 'ignore' }).status === 0;
+  return spawn.sync('codex', codexArgs(mcpSaved('.')), { stdio: 'ignore' }).status === 0;
 }
 /** The same for Claude Code, so it has the tools in a finished project that has no deck yet. */
 export function claudeArgs(launch: McpLaunch) {
@@ -40,14 +47,14 @@ export function claudeArgs(launch: McpLaunch) {
 }
 export function connectClaude() {
   spawn.sync('claude', ['mcp', 'remove', '--scope', 'user', 'present'], { stdio: 'ignore' });   // adding refuses a name in use
-  return spawn.sync('claude', claudeArgs(mcpLaunch('.')), { stdio: 'ignore' }).status === 0;
+  return spawn.sync('claude', claudeArgs(mcpSaved('.')), { stdio: 'ignore' }).status === 0;
 }
 
 /** Points Claude Code at this deck and leaves the instructions any agent reads. Safe to run again. */
 export function connectDeck(dir: string) {
   const root = resolve(dir);
   if (!existsSync(join(root, 'deck.yaml'))) throw new Error(`${root} has no deck.yaml`);
-  writeClaude(root, mcpLaunch(root));
+  writeClaude(root, mcpSaved(root));
   if (!existsSync(join(root, 'AGENTS.md'))) writeFileSync(join(root, 'AGENTS.md'), LOOP);
   const skill = join(root, '.claude', 'skills', 'present', 'SKILL.md');
   if (!existsSync(skill)) {

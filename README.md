@@ -18,7 +18,7 @@ Download the app from the [latest release](https://github.com/Seronic2001/presen
 | System | File | First run |
 | --- | --- | --- |
 | Windows 10/11 | `Present-Setup-<version>.exe` | Run it. It installs for your user only and adds a desktop shortcut. The installer is not code-signed, so SmartScreen says "Windows protected your PC": click **More info**, then **Run anyway**. |
-| Linux (x64) | `Present-<version>.AppImage` | `chmod +x Present-*.AppImage`, then run it. Some distributions need `libfuse2` for AppImages. |
+| Linux (x64) | `Present-<version>.AppImage` | `chmod +x Present-*.AppImage`, then run it. Some distributions need `libfuse2` for AppImages. Keep the file where it is after choosing Connect: agents run it by that path, so if you move or rename it, choose Connect again. |
 | macOS | none yet | Run from source; see [Quick start](#quick-start). |
 
 You also need:

@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { chromium } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { addAnnotation, addFromLibrary, applyOps, harvest, listLibrary, planMarkdown, planProgress, readAnnotations, reviewPlan, revisionOf, savePlan, saveToLibrary } from '@present/core';
-import { claudeArgs, codexArgs, connectDeck } from '@present/mcp';
+import { claudeArgs, codexArgs, connectDeck, mcpSaved } from '@present/mcp';
 import { startDev } from '@present/studio';
 import { tempDeck } from './helpers.ts';
 
@@ -224,6 +224,12 @@ describe('connecting agents', () => {
   });
   it('gives Claude Code a user-level entry too, for a project with no deck yet', () => {
     expect(claudeArgs({ command: 'node', args: ['bin.ts', 'deck'] })).toEqual(['mcp', 'add', '--scope', 'user', 'present', '--', 'node', 'bin.ts']);
+  });
+  it('saves the AppImage file, not a path inside its mount, which is gone once the app closes', () => {
+    const saved = mcpSaved('deck', { APPIMAGE: '/home/a/Present.AppImage', ELECTRON_RUN_AS_NODE: '1' });
+    expect(saved).toEqual({ command: '/home/a/Present.AppImage', args: ['--mcp', resolve('deck')] });
+    expect(claudeArgs(saved)).toEqual(['mcp', 'add', '--scope', 'user', 'present', '--', '/home/a/Present.AppImage', '--mcp']);
+    expect(mcpSaved('deck', {}).command).toBe(process.execPath);
   });
   it('gives Codex one entry that follows the folder, and the app runs it as Node', () => {
     const args = codexArgs({ command: 'present.exe', args: ['bin.ts', 'deck'], env: { ELECTRON_RUN_AS_NODE: '1' } });

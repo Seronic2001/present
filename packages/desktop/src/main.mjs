@@ -237,7 +237,18 @@ function buildMenu() {
 
 const deckFrom = argv => argv.slice(1).find(a => !a.startsWith('-') && existsSync(join(resolve(a), 'deck.yaml')));
 
-if (!app.requestSingleInstanceLock()) app.quit();
+/** `Present --mcp [dir]`: the MCP server on this process's stdio, with no window. An AppImage saves this
+ *  command in agents' settings (see mcpSaved), because the paths inside its mount do not outlive the app. */
+function serveMcp(argv) {
+  const at = argv.indexOf('--mcp'), dir = argv[at + 1] && !argv[at + 1].startsWith('-') ? [argv[at + 1]] : [];
+  const child = spawn(process.execPath, [resolve(here, '../../mcp/src/bin.ts'), ...dir], { env: asNode, stdio: 'inherit' });
+  child.on('error', () => app.exit(1));
+  child.on('exit', code => app.exit(code ?? 1));
+  app.on('will-quit', () => stop(child));
+}
+
+if (process.argv.includes('--mcp')) serveMcp(process.argv);
+else if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', (_e, argv) => { const d = deckFrom(argv); if (d) openDeck(d); else (welcome ?? [...decks.values()][0]?.win)?.focus(); });
   app.on('before-quit', () => { app.isQuitting = true; for (const d of decks.values()) if (d.server) stop(d.server); });
