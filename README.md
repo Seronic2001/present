@@ -11,9 +11,28 @@ The folder is the only link between them. The MCP server writes to it, the app w
 
 The core rule: a frame is a pure function, `render(document, slide, step, t) → pixels`. Any moment of any animation can be reproduced, so an agent can look at it and a test can check it.
 
+## Install
+
+Download the app from the [latest release](https://github.com/Seronic2001/present/releases/latest). It brings its own runtime, so you do not need Node.
+
+| System | File | First run |
+| --- | --- | --- |
+| Windows 10/11 | `Present-Setup-<version>.exe` | Run it. It installs for your user only and adds a desktop shortcut. The installer is not code-signed, so SmartScreen says "Windows protected your PC": click **More info**, then **Run anyway**. |
+| Linux (x64) | `Present-<version>.AppImage` | `chmod +x Present-*.AppImage`, then run it. Some distributions need `libfuse2` for AppImages. |
+| macOS | none yet | Run from source; see [Quick start](#quick-start). |
+
+You also need:
+
+- **Chrome or Edge.** Rendering, screenshots and PDF export use the browser already on the machine.
+- **An agent CLI, for chat:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex or OpenCode, installed and logged in. The app finds whichever you have. Without one, you can still open, edit, present and export decks.
+
+Then open the app, and choose **New Deck…** or **Open Deck…** from the menu (the button at the top left). To try it on a finished deck, download this repository and open `examples/launch-story`. To let Claude Code or Codex in a terminal edit your decks, choose **File > Connect to Claude Code and Codex…** once.
+
+To update, download and run the newer file. Your decks are ordinary folders and are not touched.
+
 ## Quick start
 
-Needs Node 24 (it runs the TypeScript directly) and Chrome or Edge.
+Run from source. Needs Node 24 (it runs the TypeScript directly) and Chrome or Edge.
 
 ```sh
 npm install
@@ -35,7 +54,7 @@ npm run desktop -- my-talk                     # open the live preview
 cd my-talk && claude                           # or codex: the agent has the present MCP tools
 ```
 
-`connect` adds one entry to your Claude Code and Codex user settings. It names no deck: it serves whichever folder the agent starts in. A new deck also has its own `.mcp.json`, which Claude Code asks you to approve the first time. In the app, the same step is File > Connect Claude Code and Codex.
+`connect` adds one entry to your Claude Code and Codex user settings. It names no deck: it serves whichever folder the agent starts in. A new deck also has its own `.mcp.json`, which Claude Code asks you to approve the first time. In the app, the same step is File > Connect to Claude Code and Codex….
 
 ## Two ways to work
 
@@ -194,7 +213,7 @@ Chat agents edit only through the `present` tools, so every change is validated 
 
 ## Desktop app
 
-`npm run desktop` runs Present as a desktop app, with the Studio window for each deck, and `npm run package` builds a Windows installer in `release/`. Each deck opens in its own window. The app brings its own runtime, so the installed version does not need Node. Rendering, screenshots and PDF export still use the Chrome or Edge on the machine, and the chat still uses the agent CLIs you have installed.
+`npm run desktop` runs Present as a desktop app, with the Studio window for each deck, and `npm run package` builds a Windows installer in `release/`. Pushing a `v*` tag runs `.github/workflows/release.yml`, which tests, builds the Windows installer and the Linux AppImage, and attaches both to a GitHub release. Each deck opens in its own window. The app brings its own runtime, so the installed version does not need Node. Rendering, screenshots and PDF export still use the Chrome or Edge on the machine, and the chat still uses the agent CLIs you have installed.
 
 `electron-builder.yml` keeps the app unpacked, because the server compiles its own sources at run time. `scripts/desktop-after-pack.cjs` replaces each `@present` package with a stub that points back at `packages/`, because Node will not strip types under `node_modules`. The installer is not code-signed, so Windows SmartScreen warns on first run. To test a packaged build, set `PRESENT_DESKTOP_EXE` to its `Present.exe` and run `tests/desktop.test.ts`.
 
